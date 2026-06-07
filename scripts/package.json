@@ -1,0 +1,17 @@
+{
+  "name": "molpha-starknet-scripts",
+  "version": "1.0.0",
+  "description": "Deployment and admin scripts for the Molpha Starknet Verifier",
+  "private": true,
+  "scripts": {
+    "add-node": "node add_node.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@noble/hashes": "^2.2.0",
+    "@noble/secp256k1": "^3.1.0"
+  }
+}

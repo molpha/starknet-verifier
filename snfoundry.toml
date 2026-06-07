@@ -1,0 +1,20 @@
+# Starknet Foundry (sncast) configuration for Molpha Verifier deployments.
+#
+# Import a Sepolia account first, then set `account` (and optionally `keystore`):
+#   sncast account import --network sepolia --name deployer --address <ADDR> --type oz
+#
+# See scripts/deploy_testnet.sh for usage.
+
+[sncast.testnet]
+url = "https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/ZSohmmQcpY-UQySKpInucr0o3sh0JO5f"
+# account = "deployer"
+# keystore = "~/.starknet_accounts/deployer.keystore"
+show-explorer-links = true
+block-explorer = "Voyager"
+wait-params = { timeout = 300, retry-interval = 5 }
+
+[sncast.testnet.networks]
+sepolia = "https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/ZSohmmQcpY-UQySKpInucr0o3sh0JO5f"
+
+[sncast.default]
+account = "sepolia"

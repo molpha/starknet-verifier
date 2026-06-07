@@ -1,0 +1,4 @@
+.env
+**/deployments/
+scripts/node_modules/
+target

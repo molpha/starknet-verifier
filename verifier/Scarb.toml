@@ -1,0 +1,26 @@
+[package]
+name = "verifier"
+version = "0.1.0"
+edition = "2024_07"
+
+# Molpha StarkNet Verifier
+#
+# A faithful Cairo port of the Molpha EVM `Verifier.sol` contract. It verifies
+# the exact same PoP-Schnorr aggregate signatures over secp256k1, so a payload
+# signed once by the Molpha node network verifies on both EVM and StarkNet.
+
+[dependencies]
+starknet = "2.18.0"
+
+[dev-dependencies]
+snforge_std = "0.61.0"
+assert_macros = "2.18.0"
+
+[[target.starknet-contract]]
+sierra = true
+
+[scripts]
+test = "snforge test"
+
+[tool.scarb]
+allow-prebuilt-plugins = ["snforge_std"]
