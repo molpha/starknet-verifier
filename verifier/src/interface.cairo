@@ -26,7 +26,7 @@ pub struct SchnorrSignature {
 /// Self-contained signed result payload for one pull round.
 #[derive(Drop, Serde, Copy)]
 pub struct DataUpdate {
-    pub job_id: u256,
+    pub feed_id: u256,
     pub registry_version: u32,
     pub signatures_required: u32,
     pub value: u256,

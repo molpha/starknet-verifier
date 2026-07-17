@@ -23,6 +23,7 @@ This repository contains a Cairo implementation of the Molpha verifier contract 
 cp .env.example .env
 scarb build
 snforge test
+cd verifier && scarb run bench   # optional: L2 gas benchmarks
 ```
 
 For implementation details and parity notes, see `verifier/README.md`.

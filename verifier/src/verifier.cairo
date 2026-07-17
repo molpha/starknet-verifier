@@ -1,7 +1,7 @@
 //! Molpha Verifier — StarkNet port of `Verifier.sol`.
 //!
 //! Stores the mirrored node public-key set indexed by `registry_version` and
-//! verifies Molpha PoP-Schnorr aggregate signatures. Holds no job, round, or
+//! verifies Molpha PoP-Schnorr aggregate signatures. Holds no feed_id, round, or
 //! feed state — every input is either in the snapshot (node coordinates by
 //! version) or in calldata protected by the aggregate signature.
 //!
@@ -109,7 +109,7 @@ pub mod Verifier {
             // 1. Selection seed from calldata.
             let selection_seed = self
                 ._selection_seed(
-                    data_update.job_id,
+                    data_update.feed_id,
                     data_update.registry_version,
                     data_update.canonical_timestamp,
                 );
@@ -148,12 +148,12 @@ pub mod Verifier {
             assert(schnorr_data.signers_bitmap & ~selection_bitmap == 0, 'Signer not selected');
 
             // 8. Plain-sum coalition key over the signers.
-            let (agg_x, agg_y) = self._aggregate_coords(version, schnorr_data.signers_bitmap);
+            let agg_point = self._aggregate_point(version, schnorr_data.signers_bitmap);
 
             // 9. Reconstruct the signed message.
             let message = self
                 ._construct_message(
-                    data_update.job_id,
+                    data_update.feed_id,
                     data_update.registry_version,
                     data_update.signatures_required,
                     schnorr_data.signers_bitmap,
@@ -161,9 +161,11 @@ pub mod Verifier {
                     data_update.canonical_timestamp,
                 );
 
-            // 10. Aggregate Schnorr verification.
-            schnorr::verify_trusted(
-                agg_x, agg_y, message, schnorr_data.signature, schnorr_data.commitment,
+            // 10. Aggregate Schnorr verification. Pass the aggregate point
+            // directly so the Schnorr path skips a redundant
+            // coordinates → secp256_ec_new round-trip.
+            schnorr::verify_trusted_point(
+                agg_point, message, schnorr_data.signature, schnorr_data.commitment,
             )
         }
 
@@ -323,25 +325,25 @@ pub mod Verifier {
             assert(get_caller_address() == self.protocol_admin.read(), 'Not protocol admin');
         }
 
-        /// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ jobId ‖
+        /// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ feedId ‖
         ///                           registryVersion ‖ canonicalTimestamp)
         fn _selection_seed(
-            self: @ContractState, job_id: u256, registry_version: u32, canonical_timestamp: u64,
+            self: @ContractState, feed_id: u256, registry_version: u32, canonical_timestamp: u64,
         ) -> u256 {
             let mut buf: ByteArray = "";
             append_u256_be(ref buf, SELECTION_SEED_PREFIX());
-            append_u256_be(ref buf, job_id);
+            append_u256_be(ref buf, feed_id);
             append_u32_be(ref buf, registry_version);
             append_u64_be(ref buf, canonical_timestamp);
             keccak_bytes(@buf)
         }
 
-        /// message = keccak256("MOLPHA_MESSAGE_V1" ‖ jobId ‖ registryVersion ‖
+        /// message = keccak256("MOLPHA_MESSAGE_V1" ‖ feedId ‖ registryVersion ‖
         ///                     signaturesRequired ‖ signersBitmap ‖ value ‖
         ///                     canonicalTimestamp)
         fn _construct_message(
             self: @ContractState,
-            job_id: u256,
+            feed_id: u256,
             registry_version: u32,
             signatures_required: u32,
             signers_bitmap: u256,
@@ -350,7 +352,7 @@ pub mod Verifier {
         ) -> u256 {
             let mut buf: ByteArray = "";
             append_u256_be(ref buf, MESSAGE_PREFIX());
-            append_u256_be(ref buf, job_id);
+            append_u256_be(ref buf, feed_id);
             append_u32_be(ref buf, registry_version);
             append_u32_be(ref buf, signatures_required);
             append_u256_be(ref buf, signers_bitmap);
@@ -359,15 +361,33 @@ pub mod Verifier {
             keccak_bytes(@buf)
         }
 
-        /// Sums the public keys of the signers (ascending 1-based index order).
-        fn _aggregate_coords(
-            self: @ContractState, version: u64, mut signers_bitmap: u256,
-        ) -> (u256, u256) {
+        /// Plain EC sum of the signers' public keys (ascending 1-based index
+        /// order), returned as a curve point so the caller avoids an extra
+        /// coordinates → point round-trip. The 256-bit bitmap is walked as two
+        /// native `u128` halves to keep each shift on the cheaper width.
+        fn _aggregate_point(
+            self: @ContractState, version: u64, signers_bitmap: u256,
+        ) -> Secp256k1Point {
             let mut acc: Option<Secp256k1Point> = Option::None;
+            acc = self._accumulate_word(version, signers_bitmap.low, 0, acc);
+            acc = self._accumulate_word(version, signers_bitmap.high, 128, acc);
+            acc.unwrap()
+        }
+
+        /// Adds every signer set in one 128-bit half of the bitmap into `acc`.
+        /// `base` is the bit offset of the half (0 for low, 128 for high); the
+        /// 1-based signer index is `base + pos + 1`.
+        fn _accumulate_word(
+            self: @ContractState,
+            version: u64,
+            mut word: u128,
+            base: u32,
+            mut acc: Option<Secp256k1Point>,
+        ) -> Option<Secp256k1Point> {
             let mut pos: u32 = 0;
-            while signers_bitmap != 0 {
-                if signers_bitmap.low % 2 == 1 {
-                    let signer_index = pos + 1;
+            while word != 0 {
+                if word % 2 == 1 {
+                    let signer_index = base + pos + 1;
                     let x = self.key_x.read(slot(version, signer_index));
                     let y = self.key_y.read(slot(version, signer_index));
                     let pt = ec::new_point(x, y).unwrap();
@@ -377,10 +397,10 @@ pub mod Verifier {
                             Option::Some(a) => Option::Some(ec::add(a, pt)),
                         };
                 }
-                signers_bitmap = signers_bitmap / 2;
+                word = word / 2;
                 pos += 1;
             }
-            ec::coords(acc.unwrap())
+            acc
         }
 
         /// Copies node entries `1..=count` from `from_version` to `to_version`,
