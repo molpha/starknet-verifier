@@ -14,7 +14,27 @@ use crate::byte_utils::{append_u256_be, keccak_bytes};
 use crate::constants::SELECTION_DOMAIN;
 
 const U32_MAX: u64 = 0xFFFFFFFF;
-const POW2_32: u256 = 0x100000000;
+
+/// Extracts big-endian `uint32` limb `w` (`0..8`, MSB first) from a 256-bit
+/// digest. Equivalent to `(digest / 2^(224 - 32*w)) % 2^32` but works on the
+/// native `u128` halves with constant divisors — no `two_pow` / `u256` divide.
+fn limb_at(digest: u256, w: u32) -> u64 {
+    let word: u128 = if w < 4 {
+        digest.high
+    } else {
+        digest.low
+    };
+    let v: u128 = if w % 4 == 0 {
+        word / 0x1000000000000000000000000_u128
+    } else if w % 4 == 1 {
+        (word / 0x10000000000000000_u128) % 0x100000000_u128
+    } else if w % 4 == 2 {
+        (word / 0x100000000_u128) % 0x100000000_u128
+    } else {
+        word % 0x100000000_u128
+    };
+    v.try_into().unwrap()
+}
 
 /// Full mask of `n_count` low bits.
 fn full_mask(n_count: u32) -> u256 {
@@ -46,9 +66,7 @@ fn sample_without_replacement(seed: u256, n_count: u32, group_size: u32) -> u256
         let mut w: u32 = 0;
         while w < 8 && selected < group_size {
             // Big-endian uint32 limb w (MSB first): bits [224 - 32*w .. +32).
-            let shift: u32 = 224 - 32 * w;
-            let limb_u256 = (digest / two_pow(shift)) % POW2_32;
-            let limb: u64 = limb_u256.try_into().unwrap();
+            let limb: u64 = limb_at(digest, w);
 
             if limb < limit {
                 let pos: u64 = limb % nn;

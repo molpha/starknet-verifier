@@ -6,7 +6,7 @@
 //! `chainId`, so the same `(DataUpdate, SchnorrSignature)` payload is valid on
 //! every chain. This crate reproduces the EVM verification logic bit-for-bit:
 //!
-//!   message    = keccak256("MOLPHA_MESSAGE_V1" ‖ jobId ‖ registryVersion ‖
+//!   message    = keccak256("MOLPHA_MESSAGE_V1" ‖ feedId ‖ registryVersion ‖
 //!                          signaturesRequired ‖ signersBitmap ‖ value ‖
 //!                          canonicalTimestamp)
 //!   challenge  = keccak256(Pₓ ‖ Pₚ ‖ message ‖ commitment) mod Q

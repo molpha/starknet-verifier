@@ -9,9 +9,9 @@ signature valid on every chain. This contract reproduces the EVM verification
 pipeline exactly:
 
 ```
-selectionSeed   = keccak256("MOLPHA_SELECTION_V1" ‖ jobId ‖ registryVersion ‖ canonicalTimestamp)
+selectionSeed   = keccak256("MOLPHA_SELECTION_V1" ‖ feedId ‖ registryVersion ‖ canonicalTimestamp)
 selectionBitmap = deriveWithoutReplacement(selectionSeed, nodeCount, groupSize)
-message         = keccak256("MOLPHA_MESSAGE_V1" ‖ jobId ‖ registryVersion ‖
+message         = keccak256("MOLPHA_MESSAGE_V1" ‖ feedId ‖ registryVersion ‖
                             signaturesRequired ‖ signersBitmap ‖ value ‖ canonicalTimestamp)
 X_coalition     = Σ Xᵢ   for each signer i in signersBitmap   (plain EC sum)
 challenge e     = keccak256(Pₓ ‖ Pₚ ‖ message ‖ commitment) mod Q
@@ -70,8 +70,28 @@ fixture), independently reproduced with a from-scratch secp256k1 reference:
 
 ```bash
 scarb build      # compiles the Verifier contract class
-snforge test     # runs the parity + end-to-end suite (12 tests)
+snforge test     # runs parity, e2e, and benchmark tests (26 tests)
+scarb run bench  # gas benchmarks (see tests/benchmarks.cairo)
 ```
+
+### Gas benchmarks
+
+`tests/benchmarks.cairo` measures L2 gas per contract selector using snforge's
+`--gas-report`. Each benchmark test calls the function under measurement once
+(after setup), so the report shows min / max / avg across scenarios:
+
+```bash
+scarb run bench
+# consolidated table (all selectors in one test):
+snforge test bench_gas_snapshot --gas-report
+# verify cost vs signer count (3 / 5 / 9 / 12 / 18):
+snforge test bench_verify_signer_scaling --gas-report
+# per-scenario breakdown:
+snforge test benchmarks --gas-report
+```
+
+Add `--trace-components gas` to see per-test call traces. Baseline numbers are
+documented in the module header of `tests/benchmarks.cairo`.
 
 Requires Scarb 2.18 and `snforge` 0.61 (the toolchain this was developed
 against).

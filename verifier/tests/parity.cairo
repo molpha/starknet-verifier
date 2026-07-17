@@ -30,7 +30,7 @@ fn keccak_is_evm_compatible() {
 
 #[test]
 fn selection_seed_encoding_matches_evm() {
-    // keccak256("MOLPHA_SELECTION_V1" ‖ jobId ‖ registryVersion ‖ canonicalTimestamp)
+    // keccak256("MOLPHA_SELECTION_V1" ‖ feedId ‖ registryVersion ‖ canonicalTimestamp)
     let mut buf: ByteArray = "";
     append_u256_be(ref buf, SELECTION_SEED_PREFIX());
     append_u256_be(ref buf, JOB_ID());
@@ -41,7 +41,7 @@ fn selection_seed_encoding_matches_evm() {
 
 #[test]
 fn message_encoding_matches_evm() {
-    // keccak256("MOLPHA_MESSAGE_V1" ‖ jobId ‖ registryVersion ‖ signaturesRequired
+    // keccak256("MOLPHA_MESSAGE_V1" ‖ feedId ‖ registryVersion ‖ signaturesRequired
     //           ‖ signersBitmap ‖ value ‖ canonicalTimestamp)
     let mut buf: ByteArray = "";
     append_u256_be(ref buf, MESSAGE_PREFIX());

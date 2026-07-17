@@ -33,16 +33,7 @@ pub fn challenge(px: u256, parity: u8, message: u256, commitment: felt252) -> u2
 pub fn verify_trusted(
     px: u256, py: u256, message: u256, signature: u256, commitment: felt252,
 ) -> bool {
-    let parity: u8 = (py.low % 2).try_into().unwrap();
-    let e = challenge(px, parity, message, commitment);
-
-    // T = s·G − e·P
-    let s_g = ec::mul(ec::generator(), signature);
-    let p = ec::new_point(px, py).unwrap();
-    let e_p = ec::mul(p, e);
-    let t = ec::add(s_g, ec::negate(e_p));
-
-    ec::eth_address(t) == commitment
+    verify_trusted_point(ec::new_point(px, py).unwrap(), message, signature, commitment)
 }
 
 /// Defensive Schnorr verification with the same guards as
@@ -63,10 +54,23 @@ pub fn verify(px: u256, py: u256, message: u256, signature: u256, commitment: fe
     }
 }
 
-/// Verifies a Schnorr signature for an already-constructed point.
+/// Verifies a Schnorr signature for an already-constructed point. This is the
+/// canonical implementation; the coordinate-based `verify_trusted` is a thin
+/// wrapper that reconstructs the point.
+///
+/// Computes `T = s·G − e·P` as `s·G + (Q − e)·P`. Folding the negation into the
+/// scalar lets us reuse `p` directly for the scalar-mul and skips a point
+/// negation (a `get_coordinates` + `secp256_ec_new` syscall pair).
 pub fn verify_trusted_point(
     p: Secp256k1Point, message: u256, signature: u256, commitment: felt252,
 ) -> bool {
     let (px, py) = ec::coords(p);
-    verify_trusted(px, py, message, signature, commitment)
+    let parity: u8 = (py.low % 2).try_into().unwrap();
+    let e = challenge(px, parity, message, commitment);
+
+    let s_g = ec::mul(ec::generator(), signature);
+    let neg_e_p = ec::mul(p, CURVE_ORDER_Q() - e);
+    let t = ec::add(s_g, neg_e_p);
+
+    ec::eth_address(t) == commitment
 }

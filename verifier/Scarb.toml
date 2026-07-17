@@ -21,6 +21,7 @@ sierra = true
 
 [scripts]
 test = "snforge test"
+bench = "snforge test benchmarks --gas-report --detailed-resources"
 
 [tool.scarb]
 allow-prebuilt-plugins = ["snforge_std"]

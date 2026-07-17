@@ -2,3 +2,5 @@
 **/deployments/
 scripts/node_modules/
 target
+verifier/.snfoundry_cache
+.snfoundry_cache
