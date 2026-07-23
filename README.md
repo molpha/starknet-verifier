@@ -107,23 +107,6 @@ Each signed payload references the registry version it was produced against, all
 
 ⸻
 
-Repository structure
-
-contracts/
-├── verifier.cairo
-├── registry.cairo
-├── crypto/
-└── interfaces/
-tests/
-├── verifier/
-├── registry/
-└── parity/
-scripts/
-├── deployment/
-└── registration/
-
-⸻
-
 Running locally
 
 Build the contracts:
@@ -149,6 +132,40 @@ The repository includes tests for:
 * Payload tampering
 * Encoding compatibility
 * Cross-chain parity with the EVM verifier
+
+⸻
+
+Benchmarks
+
+L2 gas measured with snforge 0.61 (`snforge test benchmarks --gas-report`).
+
+Baseline fixture: 10 nodes, redundancy_buffer=2, signatures_required=3, 5 signers in bitmap.
+
+Operation	L2 gas
+verify (success)	~24,711,400
+verify (tampered)	~24,711,500
+add_node (first)	~22,751,716
+add_node (10th)	~25,626,976
+remove_node	~5,068,667
+get_total_nodes	~48,770
+get_aggregate_key	~115,980
+
+Verify cost vs signer count (18-node registry):
+
+Signers	L2 gas	group_size
+3	24,469,138	5
+5	24,871,970	5
+9	27,487,149	9
+12	26,560,466	12
+18	25,540,671	18
+
+Cost is not strictly linear in signer count: signer selection uses different algorithms depending on group size relative to the registry, while aggregation and Schnorr verification dominate overall cost.
+
+Re-run from `verifier/`:
+
+scarb run bench
+snforge test bench_gas_snapshot --gas-report
+snforge test bench_verify_signer_scaling --gas-report
 
 ⸻
 
