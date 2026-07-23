@@ -27,14 +27,19 @@ pub fn ADMIN() -> ContractAddress {
     0x00ad3119.try_into().unwrap()
 }
 
-pub fn deploy() -> IVerifierDispatcher {
+pub fn deploy_with_params(
+    initial_protocol_admin: ContractAddress, initial_redundancy_buffer: u256,
+) -> IVerifierDispatcher {
     let contract = declare("Verifier").unwrap().contract_class();
     let mut calldata: Array<felt252> = array![];
-    ADMIN().serialize(ref calldata);
-    let buffer: u256 = 2;
-    buffer.serialize(ref calldata);
+    initial_protocol_admin.serialize(ref calldata);
+    initial_redundancy_buffer.serialize(ref calldata);
     let (address, _) = contract.deploy(@calldata).unwrap();
     IVerifierDispatcher { contract_address: address }
+}
+
+pub fn deploy() -> IVerifierDispatcher {
+    deploy_with_params(ADMIN(), 2)
 }
 
 /// (a * b) mod q using a 512-bit intermediate.
@@ -131,6 +136,19 @@ pub fn register_nodes(dispatcher: IVerifierDispatcher, count: u32) {
 /// Registers the first `count` fixture nodes through the real `add_node` path.
 pub fn register_fixture_nodes(dispatcher: IVerifierDispatcher, count: u32) {
     register_nodes(dispatcher, count);
+}
+
+/// Registration calldata and identity for one fixture node by 0-based slot.
+pub fn fixture_node_registration(
+    dispatcher: IVerifierDispatcher, slot: u32,
+) -> (ByteArray, SchnorrProof, felt252) {
+    let nodes = fixture_nodes();
+    let (prefix, x, sk) = *nodes.at(slot);
+    let comp = compressed(prefix, x);
+    let (px, py) = ec::decompress(@comp);
+    let pop = sign(px, py, sk, pop_digest(dispatcher.contract_address, @comp));
+    let node = ec::point_eth_address(px, py);
+    (comp, pop, node)
 }
 
 /// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ feedId ‖ registryVersion ‖ timestamp)

@@ -15,16 +15,17 @@
 #   # Then uncomment `account` / `keystore` in snfoundry.toml, or export SNCAST_ACCOUNT.
 #
 # Usage:
-#   cp .env.example .env   # set PROTOCOL_ADMIN
+#   cp .env.example .env   # set PROTOCOL_ADMIN and STARKNET_RPC_URL
 #   ./scripts/deploy_testnet.sh
 #
 # Environment:
-#   PROTOCOL_ADMIN   (required) ContractAddress for protocol_admin constructor arg
+#   PROTOCOL_ADMIN    (required) ContractAddress for protocol_admin constructor arg
+#   STARKNET_RPC_URL  (required) Starknet RPC endpoint (never commit API keys)
 #   REDUNDANCY_BUFFER (optional) u256 redundancy buffer, default 2
-#   SNCAST_PROFILE   (optional) snfoundry profile, default testnet
-#   SNCAST_ACCOUNT   (optional) account name, overrides snfoundry.toml
-#   DRY_RUN          (optional) set to 1 to estimate fees without sending txs
-#   DEPLOY_SALT      (optional) felt salt for deterministic address (uses --unique if unset)
+#   SNCAST_PROFILE    (optional) snfoundry profile, default testnet
+#   SNCAST_ACCOUNT    (optional) account name, overrides snfoundry.toml
+#   DRY_RUN           (optional) set to 1 to estimate fees without sending txs
+#   DEPLOY_SALT       (optional) felt salt for deterministic address (uses --unique if unset)
 
 set -euo pipefail
 
@@ -59,6 +60,12 @@ if [[ -z "${PROTOCOL_ADMIN:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${STARKNET_RPC_URL:-}" ]]; then
+  echo "error: STARKNET_RPC_URL is required (Starknet RPC endpoint)." >&2
+  echo "  export STARKNET_RPC_URL=https://...  or set it in .env" >&2
+  exit 1
+fi
+
 if [[ ! "$PROTOCOL_ADMIN" =~ ^0x[0-9a-fA-F]+$ ]]; then
   echo "error: PROTOCOL_ADMIN must be a hex Starknet address (0x...)." >&2
   exit 1
@@ -69,10 +76,7 @@ if [[ ! "$REDUNDANCY_BUFFER" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-SNCAST_ARGS=(--profile "$SNCAST_PROFILE")
-if [[ -n "${STARKNET_RPC_URL:-}" ]]; then
-  SNCAST_ARGS+=(--url "$STARKNET_RPC_URL")
-fi
+SNCAST_ARGS=(--profile "$SNCAST_PROFILE" --url "$STARKNET_RPC_URL")
 if [[ -n "${SNCAST_ACCOUNT:-}" ]]; then
   SNCAST_ARGS+=(--account "$SNCAST_ACCOUNT")
 fi

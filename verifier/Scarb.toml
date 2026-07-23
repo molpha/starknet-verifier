@@ -2,6 +2,7 @@
 name = "verifier"
 version = "0.1.0"
 edition = "2024_07"
+license = "Apache-2.0"
 
 # Molpha StarkNet Verifier
 #
