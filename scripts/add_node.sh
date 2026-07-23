@@ -10,7 +10,7 @@
 #   - sncast account configured (must be protocol_admin)
 #
 # Usage:
-#   cp .env.example .env   # set VERIFIER_ADDRESS, NODE_PRIVATE_KEY
+#   cp .env.example .env   # set VERIFIER_ADDRESS, NODE_PRIVATE_KEY, STARKNET_RPC_URL
 #   npm install --prefix scripts
 #   ./scripts/add_node.sh
 #   ./scripts/add_node.sh 0xVERIFIER 0xNODE_PRIVATE_KEY   # overrides .env
@@ -18,10 +18,10 @@
 # Environment / CLI:
 #   VERIFIER_ADDRESS    (required) deployed Verifier contract
 #   NODE_PRIVATE_KEY    (required) secp256k1 secret key for the node
+#   STARKNET_RPC_URL    (required) Starknet RPC endpoint (never commit API keys)
 #   COMPRESSED_PUBKEY   (optional) 33-byte compressed pubkey hex
 #   SNCAST_PROFILE      (optional) default testnet
 #   SNCAST_ACCOUNT      (optional) account name
-#   STARKNET_RPC_URL    (optional) RPC override
 #   DRY_RUN             (optional) set to 1 to estimate fees only
 
 set -euo pipefail
@@ -69,15 +69,18 @@ if [[ -z "${NODE_PRIVATE_KEY:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${STARKNET_RPC_URL:-}" ]]; then
+  echo "error: STARKNET_RPC_URL is required (Starknet RPC endpoint)." >&2
+  echo "  export STARKNET_RPC_URL=https://...  or set it in .env" >&2
+  exit 1
+fi
+
 if [[ ! "$VERIFIER_ADDRESS" =~ ^0x[0-9a-fA-F]+$ ]]; then
   echo "error: VERIFIER_ADDRESS must be a hex Starknet address." >&2
   exit 1
 fi
 
-SNCAST_ARGS=(--profile "$SNCAST_PROFILE")
-if [[ -n "${STARKNET_RPC_URL:-}" ]]; then
-  SNCAST_ARGS+=(--url "$STARKNET_RPC_URL")
-fi
+SNCAST_ARGS=(--profile "$SNCAST_PROFILE" --url "$STARKNET_RPC_URL")
 if [[ -n "${SNCAST_ACCOUNT:-}" ]]; then
   SNCAST_ARGS+=(--account "$SNCAST_ACCOUNT")
 fi

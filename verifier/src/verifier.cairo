@@ -88,6 +88,7 @@ pub mod Verifier {
         initial_protocol_admin: ContractAddress,
         initial_redundancy_buffer: u256,
     ) {
+        assert(initial_protocol_admin.into() != 0_felt252, 'Zero admin');
         self.protocol_admin.write(initial_protocol_admin);
         self.redundancy_buffer.write(initial_redundancy_buffer);
         // Version 0 is the empty set: node_count[0] = 0 and the aggregate at

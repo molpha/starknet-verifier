@@ -3,10 +3,13 @@
 # Import a Sepolia account first, then set `account` (and optionally `keystore`):
 #   sncast account import --network sepolia --name deployer --address <ADDR> --type oz
 #
+# RPC: set STARKNET_RPC_URL in .env (see .env.example). Never commit keyed URLs.
+# Scripts require it; sncast resolves $STARKNET_RPC_URL from the environment.
+#
 # See scripts/deploy_testnet.sh for usage.
 
 [sncast.testnet]
-url = "https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/ZSohmmQcpY-UQySKpInucr0o3sh0JO5f"
+url = "$STARKNET_RPC_URL"
 # account = "deployer"
 # keystore = "~/.starknet_accounts/deployer.keystore"
 show-explorer-links = true
@@ -14,7 +17,7 @@ block-explorer = "Voyager"
 wait-params = { timeout = 300, retry-interval = 5 }
 
 [sncast.testnet.networks]
-sepolia = "https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/ZSohmmQcpY-UQySKpInucr0o3sh0JO5f"
+sepolia = "$STARKNET_RPC_URL"
 
 [sncast.default]
 account = "sepolia"
