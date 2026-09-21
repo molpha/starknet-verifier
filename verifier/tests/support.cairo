@@ -11,24 +11,27 @@ use verifier::bitmap;
 use verifier::byte_utils::{append_u256_be, append_u32_be, append_u64_be, keccak_bytes};
 use verifier::constants::{CURVE_ORDER_Q, POP_DOMAIN, SELECTION_SEED_PREFIX};
 use verifier::interface::{
-    DataUpdate, IVerifierDispatcher, IVerifierDispatcherTrait, SchnorrProof, SchnorrSignature,
+    Attestation, AttestationPayload, IVerifierDispatcher, IVerifierDispatcherTrait, SchnorrProof,
+    SchnorrSignature,
 };
 use verifier::node_group_bitmap;
 use verifier::schnorr;
 use verifier::secp256k1_utils as ec;
 use super::fixtures::{
-    COMMITMENT, JOB_ID, REG_VERSION, SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED, TIMESTAMP, VALUE,
-    compressed, fixture_nodes,
+    COMMITMENT, REDUNDANCY_BUFFER, REG_VERSION, SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED,
+    SOURCE_ID, TIMESTAMP, VALUE, compressed, fixture_nodes,
 };
 
-const REDUNDANCY_BUFFER: u32 = 2;
+/// `verify`'s freshness check is opt-in; tests that are not about staleness
+/// pass this to skip it, exactly as a consumer with no freshness policy would.
+pub const NO_MAX_AGE: u64 = 0;
 
 pub fn ADMIN() -> ContractAddress {
     0x00ad3119.try_into().unwrap()
 }
 
 pub fn deploy_with_params(
-    initial_protocol_admin: ContractAddress, initial_redundancy_buffer: u256,
+    initial_protocol_admin: ContractAddress, initial_redundancy_buffer: u32,
 ) -> IVerifierDispatcher {
     let contract = declare("Verifier").unwrap().contract_class();
     let mut calldata: Array<felt252> = array![];
@@ -39,7 +42,7 @@ pub fn deploy_with_params(
 }
 
 pub fn deploy() -> IVerifierDispatcher {
-    deploy_with_params(ADMIN(), 2)
+    deploy_with_params(ADMIN(), REDUNDANCY_BUFFER)
 }
 
 /// (a * b) mod q using a 512-bit intermediate.
@@ -59,7 +62,7 @@ fn addmod(a: u256, b: u256, q: u256) -> u256 {
     }
 }
 
-/// PoP digest: keccak256("MOLPHA_VALIDATOR_V1" ‖ contractAddress(32) ‖ compressed).
+/// PoP digest: keccak256("MOLPHA_VERIFIER_V1" ‖ contractAddress(32) ‖ compressed).
 pub fn pop_digest(contract: ContractAddress, comp: @ByteArray) -> u256 {
     let mut buf: ByteArray = "";
     append_u256_be(ref buf, POP_DOMAIN());
@@ -96,7 +99,7 @@ pub fn sign(px: u256, py: u256, sk: u256, message: u256) -> SchnorrProof {
     proof
 }
 
-/// Deterministic bench-only node beyond the 10-node EVM fixture.
+/// Deterministic bench-only node beyond the EVM fixture's key set.
 pub fn synthetic_node(index: u32) -> (ByteArray, u256) {
     let mut buf: ByteArray = "MOLPHA_BENCH_NODE";
     append_u32_be(ref buf, index);
@@ -113,6 +116,10 @@ pub fn synthetic_node(index: u32) -> (ByteArray, u256) {
 }
 
 /// Registers `count` nodes: EVM fixture keys first, then deterministic synthetics.
+///
+/// Each registration bumps the registry version, so after this the current
+/// version equals `count` — which is why the fixtures' `REG_VERSION` matches
+/// their node count.
 pub fn register_nodes(dispatcher: IVerifierDispatcher, count: u32) {
     let address = dispatcher.contract_address;
     start_cheat_caller_address(address, ADMIN());
@@ -138,12 +145,12 @@ pub fn register_fixture_nodes(dispatcher: IVerifierDispatcher, count: u32) {
     register_nodes(dispatcher, count);
 }
 
-/// Registration calldata and identity for one fixture node by 0-based slot.
+/// Registration calldata and identity for one fixture node by 0-based index.
 pub fn fixture_node_registration(
-    dispatcher: IVerifierDispatcher, slot: u32,
+    dispatcher: IVerifierDispatcher, index: u32,
 ) -> (ByteArray, SchnorrProof, felt252) {
     let nodes = fixture_nodes();
-    let (prefix, x, sk) = *nodes.at(slot);
+    let (prefix, x, sk) = *nodes.at(index);
     let comp = compressed(prefix, x);
     let (px, py) = ec::decompress(@comp);
     let pop = sign(px, py, sk, pop_digest(dispatcher.contract_address, @comp));
@@ -151,11 +158,11 @@ pub fn fixture_node_registration(
     (comp, pop, node)
 }
 
-/// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ feedId ‖ registryVersion ‖ timestamp)
-pub fn selection_seed(feed_id: u256, registry_version: u32, canonical_timestamp: u64) -> u256 {
+/// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖ registryVersion ‖ timestamp)
+pub fn selection_seed(source_id: u256, registry_version: u32, canonical_timestamp: u64) -> u256 {
     let mut buf: ByteArray = "";
     append_u256_be(ref buf, SELECTION_SEED_PREFIX());
-    append_u256_be(ref buf, feed_id);
+    append_u256_be(ref buf, source_id);
     append_u32_be(ref buf, registry_version);
     append_u64_be(ref buf, canonical_timestamp);
     keccak_bytes(@buf)
@@ -165,15 +172,15 @@ pub fn selection_seed(feed_id: u256, registry_version: u32, canonical_timestamp:
 pub const BENCH_NODE_COUNT: u32 = 18;
 
 /// Bench parameters: `(node_count, signatures_required)` for `signer_count` signers.
-pub fn bench_verify_config(signer_count: u32) -> (u32, u32) {
+pub fn bench_verify_config(signer_count: u32) -> (u32, u8) {
     let node_count = BENCH_NODE_COUNT;
-    let signatures_required = if signer_count > REDUNDANCY_BUFFER + 3 {
+    let required: u32 = if signer_count > REDUNDANCY_BUFFER + 3 {
         signer_count - REDUNDANCY_BUFFER
     } else {
         3
     };
     assert(node_count >= signer_count, 'nodes lt signers');
-    (node_count, signatures_required)
+    (node_count, required.try_into().unwrap())
 }
 
 /// First `k` ascending signer indices from the derived selection bitmap.
@@ -197,34 +204,34 @@ pub fn signers_bitmap_first_k(selection_bitmap: u256, k: u32) -> u256 {
 /// Builds a `verify` payload that passes structural/selection checks for `signer_count`.
 ///
 /// `group_size` matches the contract: `min(signatures_required + redundancy_buffer, node_count)`.
-pub fn bench_verify_payload(signer_count: u32) -> (DataUpdate, SchnorrSignature) {
+pub fn bench_verify_attestation(signer_count: u32) -> Attestation {
     let (node_count, signatures_required) = bench_verify_config(signer_count);
-    let group_size = if signatures_required + REDUNDANCY_BUFFER > node_count {
+    let required32: u32 = signatures_required.into();
+    let group_size = if required32 + REDUNDANCY_BUFFER > node_count {
         node_count
     } else {
-        signatures_required + REDUNDANCY_BUFFER
+        required32 + REDUNDANCY_BUFFER
     };
-    let seed = selection_seed(JOB_ID(), node_count, TIMESTAMP);
-    let selection = node_group_bitmap::derive(seed, node_count, group_size);
+    let seed = selection_seed(SOURCE_ID(), node_count, TIMESTAMP);
+    let selection = node_group_bitmap::derive(seed, node_count, group_size).unwrap();
     let signers_bitmap = signers_bitmap_first_k(selection, signer_count);
-    let data_update = DataUpdate {
-        feed_id: JOB_ID(),
-        registry_version: node_count,
-        signatures_required,
-        value: VALUE(),
-        canonical_timestamp: TIMESTAMP,
-    };
-    // Non-zero placeholder; Schnorr check still runs at full cost.
-    let schnorr_data = SchnorrSignature {
-        signature: 1, commitment: 0x1, signers_bitmap,
-    };
-    (data_update, schnorr_data)
+    Attestation {
+        payload: AttestationPayload {
+            value: VALUE(),
+            source_id: SOURCE_ID(),
+            registry_version: node_count,
+            signatures_required,
+            canonical_timestamp: TIMESTAMP,
+        },
+        // Non-zero placeholder; the Schnorr check still runs at full cost.
+        signature: SchnorrSignature { signature: 1, commitment: 0x1, signers_bitmap },
+    }
 }
 
 /// Calls `verify` once on an already-registered dispatcher.
 pub fn call_verify_bench(dispatcher: IVerifierDispatcher, signer_count: u32) {
-    let (data_update, schnorr_data) = bench_verify_payload(signer_count);
-    let _valid = dispatcher.verify(data_update, schnorr_data);
+    let attestation = bench_verify_attestation(signer_count);
+    let (_ok, _code) = dispatcher.verify(attestation, NO_MAX_AGE);
 }
 
 /// Deploys, registers nodes, and calls `verify` once for a `signer_count` benchmark.
@@ -235,12 +242,12 @@ pub fn run_verify_bench(signer_count: u32) {
     call_verify_bench(dispatcher, signer_count);
 }
 
-pub fn fixture_data_update() -> DataUpdate {
-    DataUpdate {
-        feed_id: JOB_ID(),
+pub fn fixture_payload() -> AttestationPayload {
+    AttestationPayload {
+        value: VALUE(),
+        source_id: SOURCE_ID(),
         registry_version: REG_VERSION,
         signatures_required: SIGS_REQUIRED,
-        value: VALUE(),
         canonical_timestamp: TIMESTAMP,
     }
 }
@@ -251,12 +258,41 @@ pub fn fixture_signature() -> SchnorrSignature {
     }
 }
 
-pub fn tampered_data_update() -> DataUpdate {
-    DataUpdate {
-        feed_id: JOB_ID(),
-        registry_version: REG_VERSION,
-        signatures_required: SIGS_REQUIRED,
-        value: VALUE() + 1,
-        canonical_timestamp: TIMESTAMP,
-    }
+pub fn fixture_attestation() -> Attestation {
+    Attestation { payload: fixture_payload(), signature: fixture_signature() }
+}
+
+/// The fixture round with one bit of the signed value flipped.
+pub fn tampered_attestation() -> Attestation {
+    let mut payload = fixture_payload();
+    payload.value = VALUE() + 1;
+    Attestation { payload, signature: fixture_signature() }
+}
+
+/// Registers one arbitrary key through the real admin path, producing its PoP.
+///
+/// Used by tests that need a key set the EVM fixture does not contain — most
+/// notably a key and its own negation, the pair that drives the plain sum to
+/// the point at infinity.
+pub fn add_key(dispatcher: IVerifierDispatcher, comp: ByteArray, sk: u256) {
+    let address = dispatcher.contract_address;
+    let (px, py) = ec::decompress(@comp);
+    let pop = sign(px, py, sk, pop_digest(address, @comp));
+    start_cheat_caller_address(address, ADMIN());
+    dispatcher.add_node(comp, pop);
+    stop_cheat_caller_address(address);
+}
+
+/// The negation of fixture node `index`: same x, flipped y-parity, secret key
+/// `q - sk`. Registers as a distinct node, since `-P` has a different Ethereum
+/// address than `P`.
+pub fn negated_fixture_node(index: u32) -> (ByteArray, u256) {
+    let nodes = fixture_nodes();
+    let (prefix, x, sk) = *nodes.at(index);
+    let flipped: u8 = if prefix == 2 {
+        3
+    } else {
+        2
+    };
+    (compressed(flipped, x), CURVE_ORDER_Q() - sk)
 }

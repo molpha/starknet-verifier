@@ -21,7 +21,7 @@
 # Environment:
 #   PROTOCOL_ADMIN    (required) ContractAddress for protocol_admin constructor arg
 #   STARKNET_RPC_URL  (required) Starknet RPC endpoint (never commit API keys)
-#   REDUNDANCY_BUFFER (optional) u256 redundancy buffer, default 2
+#   REDUNDANCY_BUFFER (optional) u32 redundancy buffer (max 256), default 2
 #   SNCAST_PROFILE    (optional) snfoundry profile, default testnet
 #   SNCAST_ACCOUNT    (optional) account name, overrides snfoundry.toml
 #   DRY_RUN           (optional) set to 1 to estimate fees without sending txs
@@ -71,8 +71,8 @@ if [[ ! "$PROTOCOL_ADMIN" =~ ^0x[0-9a-fA-F]+$ ]]; then
   exit 1
 fi
 
-if [[ ! "$REDUNDANCY_BUFFER" =~ ^[0-9]+$ ]]; then
-  echo "error: REDUNDANCY_BUFFER must be a non-negative integer." >&2
+if [[ ! "$REDUNDANCY_BUFFER" =~ ^[0-9]+$ ]] || (( REDUNDANCY_BUFFER > 256 )); then
+  echo "error: REDUNDANCY_BUFFER must be an integer in 0..256." >&2
   exit 1
 fi
 
@@ -81,9 +81,6 @@ if [[ -n "${SNCAST_ACCOUNT:-}" ]]; then
   SNCAST_ARGS+=(--account "$SNCAST_ACCOUNT")
 fi
 
-# u256 is serialized as (low, high) felts. Buffer fits in low for typical values.
-BUFFER_LOW="$REDUNDANCY_BUFFER"
-BUFFER_HIGH="0"
 
 echo "==> Building Verifier (release)..."
 cd "$ROOT_DIR"
@@ -93,7 +90,7 @@ DEPLOY_ARGS=(
   deploy
   --package verifier
   --contract-name Verifier
-  --constructor-calldata "$PROTOCOL_ADMIN" "$BUFFER_LOW" "$BUFFER_HIGH"
+  --constructor-calldata "$PROTOCOL_ADMIN" "$REDUNDANCY_BUFFER"
 )
 
 if [[ -n "${DEPLOY_SALT:-}" ]]; then
