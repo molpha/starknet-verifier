@@ -4,7 +4,7 @@
 //! values in `Verifier.sol` / `NodeGroupBitmapLib.sol`:
 //!   MESSAGE_PREFIX        = keccak256("MOLPHA_MESSAGE_V1")
 //!   SELECTION_SEED_PREFIX = keccak256("MOLPHA_SELECTION_V1")
-//!   POP_DOMAIN            = keccak256("MOLPHA_VALIDATOR_V1")
+//!   POP_DOMAIN            = keccak256("MOLPHA_VERIFIER_V1")
 //!   SELECTION_DOMAIN      = keccak256("MOLPHA_SELECTION_DERIVE")
 
 /// Field modulus P of secp256k1.
@@ -32,9 +32,9 @@ pub fn SELECTION_SEED_PREFIX() -> u256 {
     u256 { high: 0x1def8159cbcfcdfd728d4197519a57c0, low: 0x6e243f0d9468b4c1e5c4a233fc5653c3 }
 }
 
-/// keccak256("MOLPHA_VALIDATOR_V1")
+/// keccak256("MOLPHA_VERIFIER_V1")
 pub fn POP_DOMAIN() -> u256 {
-    u256 { high: 0x0c067655ca151011944be1779cde5916, low: 0xc870c6e7b5c5db50ef488d63d7d1ff31 }
+    u256 { high: 0x789b999d1d38ea94308dd6904bfa70cf, low: 0x9ee14dd2b978fb6d2c894c9c84150a04 }
 }
 
 /// keccak256("MOLPHA_SELECTION_DERIVE")
@@ -44,3 +44,19 @@ pub fn SELECTION_DOMAIN() -> u256 {
 
 /// Maximum number of registered nodes (fits one 256-bit bitmap).
 pub const MAX_NODES: u32 = 256;
+
+/// How long a superseded registry version keeps verifying after its successor
+/// activates, in seconds. Matches `PREVIOUS_GRACE` in `Verifier.sol`.
+///
+/// Historical *rounds* stay verifiable forever; historical *versions* stop
+/// being usable. Without this, threshold-many keys from any version that ever
+/// existed could mint a fresh-timestamped update indefinitely, making the
+/// effective trust set the union of every node set in history.
+pub const PREVIOUS_GRACE: u64 = 60;
+
+/// Node lifecycle. An address that has been registered is never reusable:
+/// removal moves it to `RETIRED` and nothing moves it back. Each address's
+/// membership is then a single contiguous version interval.
+pub const NODE_NEVER: u8 = 0;
+pub const NODE_ACTIVE: u8 = 1;
+pub const NODE_RETIRED: u8 = 2;

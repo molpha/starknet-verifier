@@ -8,51 +8,34 @@
 //!   snforge test benchmarks --gas-report
 //!   snforge test benchmarks --gas-report --detailed-resources
 //!
-//! Baseline (snforge 0.61, fixture: 10 nodes, redundancy_buffer=2,
-//! signatures_required=3, 5 signers in bitmap 0x38a):
-//!   verify (success)     ~24,711,400 L2 gas
-//!   verify (tampered)    ~24,711,500 L2 gas
-//!   add_node (first)     ~22,751,716 L2 gas
-//!   add_node (10th)      ~25,626,976 L2 gas
-//!   remove_node          ~5,068,667 L2 gas
-//!   get_total_nodes      ~48,770 L2 gas
-//!   get_aggregate_key    ~115,980 L2 gas
-//!
 //! `bench_gas_snapshot` runs every selector in one test so `snforge test
-//! bench_gas_snapshot --gas-report` prints a single consolidated table.
+//! bench_gas_snapshot --gas-report` prints a single consolidated table. The
+//! current numbers live in the repo README rather than here, so there is one
+//! place to update when they move.
 //!
 //! Signer-scaling benchmarks (`bench_verify_N_signers`) use deterministic
-//! payloads that pass all structural/selection checks; signature bytes are
-//! placeholders so the full aggregation + Schnorr path is measured.
+//! payloads that pass every structural and selection check; the signature bytes
+//! are placeholders, so the full aggregation + Schnorr path is still measured
+//! and the call ends in `R_BAD_SIGNATURE`.
 //!
-//! Setup: 18-node registry, redundancy_buffer=2, EVM fixture feed_id/timestamp.
-//! `signatures_required` = 3 for ≤5 signers, else `signer_count - 2`.
-//! `group_size` = min(signatures_required + 2, 18) — matches the contract.
+//! Setup: 18-node registry, redundancy_buffer from the fixture, EVM fixture
+//! source_id/timestamp. `signatures_required` = 3 for ≤5 signers, else
+//! `signer_count - buffer`; `group_size` = min(signatures_required + buffer, 18),
+//! matching the contract.
 //!
-//! Measured L2 gas (`verify` only, snforge 0.61):
-//!   | Signers | L2 gas    | group_size |
-//!   |---------|-----------|------------|
-//!   | 3       | 24,469,138| 5          |
-//!   | 5       | 24,871,970| 5          |
-//!   | 9       | 27,487,149| 9          |
-//!   | 12      | 26,560,466| 12         |
-//!   | 18      | 25,540,671| 18         |
-//!
-//! Cost is not strictly linear in signer count: `node_group_bitmap::derive`
-//! uses different algorithms when `group_size ≤ n/2`, `> n/2`, or `= n`.
-//! Aggregation + Schnorr still dominate; selection path shifts the total.
-//!
-//! Run:
-//!   snforge test bench_verify_signer_scaling --gas-report
+//! Cost is not linear in signer count: `node_group_bitmap::derive` takes a
+//! different branch when `group_size ≤ n/2`, `> n/2`, or `= n`. Aggregation and
+//! Schnorr dominate, but the selection path shifts the total.
 
+use snforge_std::{start_cheat_caller_address, stop_cheat_caller_address};
 use verifier::interface::IVerifierDispatcherTrait;
 use verifier::secp256k1_utils as ec;
-use super::fixtures::{compressed, fixture_nodes};
+use verifier::verify_codes;
+use super::fixtures::{NODE_COUNT, compressed, fixture_nodes};
 use super::support::{
-    ADMIN, BENCH_NODE_COUNT, call_verify_bench, deploy, fixture_data_update, fixture_signature,
-    register_fixture_nodes, register_nodes, run_verify_bench, tampered_data_update,
+    ADMIN, BENCH_NODE_COUNT, NO_MAX_AGE, call_verify_bench, deploy, fixture_attestation,
+    register_fixture_nodes, register_nodes, run_verify_bench, tampered_attestation,
 };
-use snforge_std::{start_cheat_caller_address, stop_cheat_caller_address};
 
 #[test]
 fn bench_verify_3_signers() {
@@ -92,19 +75,19 @@ fn bench_verify_signer_scaling() {
 }
 
 #[test]
-fn bench_verify_success_10_nodes() {
+fn bench_verify_success() {
     let dispatcher = deploy();
-    register_fixture_nodes(dispatcher, 10);
-    assert(dispatcher.verify(fixture_data_update(), fixture_signature()), 'must verify');
+    register_fixture_nodes(dispatcher, NODE_COUNT);
+    let (ok, code) = dispatcher.verify(fixture_attestation(), NO_MAX_AGE);
+    assert(ok && code == verify_codes::R_OK, 'must verify');
 }
 
 #[test]
-fn bench_verify_reject_tampered_10_nodes() {
+fn bench_verify_reject_tampered() {
     let dispatcher = deploy();
-    register_fixture_nodes(dispatcher, 10);
-    assert(
-        !dispatcher.verify(tampered_data_update(), fixture_signature()), 'must reject',
-    );
+    register_fixture_nodes(dispatcher, NODE_COUNT);
+    let (ok, code) = dispatcher.verify(tampered_attestation(), NO_MAX_AGE);
+    assert(!ok && code == verify_codes::R_BAD_SIGNATURE, 'must reject');
 }
 
 #[test]
@@ -115,42 +98,60 @@ fn bench_add_node_first() {
 }
 
 #[test]
-fn bench_add_node_tenth() {
+fn bench_add_node_last() {
     let dispatcher = deploy();
-    register_fixture_nodes(dispatcher, 10);
-    assert(dispatcher.get_registry_version() == 10, 'version');
+    register_fixture_nodes(dispatcher, NODE_COUNT);
+    assert(dispatcher.get_registry_version() == NODE_COUNT, 'version');
+}
+
+/// Identity and 0-based index of the fixture node used by the removal benches.
+fn removal_target(index: u32) -> felt252 {
+    let nodes = fixture_nodes();
+    let (prefix, x, _) = *nodes.at(index);
+    let (px, py) = ec::decompress(@compressed(prefix, x));
+    ec::point_eth_address(px, py)
 }
 
 #[test]
 fn bench_remove_node() {
     let dispatcher = deploy();
-    register_fixture_nodes(dispatcher, 10);
+    register_fixture_nodes(dispatcher, NODE_COUNT);
 
     let address = dispatcher.contract_address;
-    let nodes = fixture_nodes();
-    let removed_slot: u32 = 4;
-    let (rprefix, rx, _) = *nodes.at(removed_slot);
-    let (rpx, rpy) = ec::decompress(@compressed(rprefix, rx));
-    let removed_id = ec::point_eth_address(rpx, rpy);
+    let removed_index: u32 = 4;
+    let removed_id = removal_target(removed_index);
 
     start_cheat_caller_address(address, ADMIN());
-    dispatcher.remove_node(removed_id);
+    dispatcher.remove_node(removed_id, removed_index);
     stop_cheat_caller_address(address);
 
-    assert(dispatcher.get_total_nodes() == 9, 'nine nodes');
+    assert(dispatcher.get_total_nodes() == NODE_COUNT - 1, 'one fewer node');
+}
+
+#[test]
+fn bench_set_redundancy_buffer() {
+    let dispatcher = deploy();
+    register_fixture_nodes(dispatcher, NODE_COUNT);
+    let address = dispatcher.contract_address;
+
+    start_cheat_caller_address(address, ADMIN());
+    dispatcher.set_redundancy_buffer(4);
+    stop_cheat_caller_address(address);
+
+    assert(dispatcher.get_redundancy_buffer() == 4, 'buffer updated');
 }
 
 #[test]
 fn bench_view_get_total_nodes() {
     let dispatcher = deploy();
-    register_fixture_nodes(dispatcher, 10);
-    assert(dispatcher.get_total_nodes() == 10, 'total nodes');
+    register_fixture_nodes(dispatcher, NODE_COUNT);
+    assert(dispatcher.get_total_nodes() == NODE_COUNT, 'total nodes');
 }
 
 #[test]
 fn bench_view_get_aggregate_key() {
     let dispatcher = deploy();
-    register_fixture_nodes(dispatcher, 10);
+    register_fixture_nodes(dispatcher, NODE_COUNT);
     let (_x, _y) = dispatcher.get_aggregate_key();
 }
 
@@ -158,22 +159,20 @@ fn bench_view_get_aggregate_key() {
 #[test]
 fn bench_gas_snapshot() {
     let dispatcher = deploy();
-    register_fixture_nodes(dispatcher, 10);
+    register_fixture_nodes(dispatcher, NODE_COUNT);
 
-    assert(dispatcher.verify(fixture_data_update(), fixture_signature()), 'ok');
-    assert(
-        !dispatcher.verify(tampered_data_update(), fixture_signature()), 'reject',
-    );
-    assert(dispatcher.get_total_nodes() == 10, 'total');
+    let (ok, _) = dispatcher.verify(fixture_attestation(), NO_MAX_AGE);
+    assert(ok, 'ok');
+    let (rejected, _) = dispatcher.verify(tampered_attestation(), NO_MAX_AGE);
+    assert(!rejected, 'reject');
+    assert(dispatcher.get_total_nodes() == NODE_COUNT, 'total');
     let (_x, _y) = dispatcher.get_aggregate_key();
 
     let address = dispatcher.contract_address;
-    let nodes = fixture_nodes();
-    let (rprefix, rx, _) = *nodes.at(4);
-    let (rpx, rpy) = ec::decompress(@compressed(rprefix, rx));
-    let removed_id = ec::point_eth_address(rpx, rpy);
+    let removed_index: u32 = 4;
+    let removed_id = removal_target(removed_index);
 
     start_cheat_caller_address(address, ADMIN());
-    dispatcher.remove_node(removed_id);
+    dispatcher.remove_node(removed_id, removed_index);
     stop_cheat_caller_address(address);
 }
