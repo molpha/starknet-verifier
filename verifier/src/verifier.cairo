@@ -25,20 +25,16 @@ pub mod Verifier {
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use starknet::{
-        ContractAddress, get_block_timestamp, get_caller_address, get_contract_address,
-    };
+    use starknet::{ContractAddress, get_block_timestamp, get_caller_address, get_contract_address};
     use crate::byte_utils::{
         append_u256_be, append_u32_be, append_u64_be, append_u8_be, is_address_sized, keccak_bytes,
     };
     use crate::constants::{
-        CURVE_ORDER_Q, MAX_NODES, MESSAGE_PREFIX, NODE_ACTIVE, NODE_NEVER, NODE_RETIRED,
-        POP_DOMAIN, PREVIOUS_GRACE, SELECTION_SEED_PREFIX,
+        CURVE_ORDER_Q, MAX_NODES, MESSAGE_PREFIX, NODE_ACTIVE, NODE_NEVER, NODE_RETIRED, POP_DOMAIN,
+        PREVIOUS_GRACE, SELECTION_SEED_PREFIX, SELECTION_WINDOW_MS,
     };
     use crate::interface::{Attestation, AttestationPayload, IVerifier, SchnorrProof};
-    use crate::secp256k1_utils as ec;
-    use crate::verify_codes;
-    use crate::{bitmap, node_group_bitmap, schnorr};
+    use crate::{bitmap, node_group_bitmap, schnorr, secp256k1_utils as ec, verify_codes};
 
     /// `2^32` — stride used to pack `(version, index)` into a single storage key.
     const SLOT_STRIDE: felt252 = 0x100000000;
@@ -165,9 +161,7 @@ pub mod Verifier {
         /// `verify_codes` for the cross-VM numbering, and the stage order below
         /// mirrors `Verifier.sol` exactly — each stage is observable through its
         /// code, so reordering them is a behaviour change.
-        fn verify(
-            self: @ContractState, attestation: Attestation, max_age: u64,
-        ) -> (bool, u8) {
+        fn verify(self: @ContractState, attestation: Attestation, max_age: u64) -> (bool, u8) {
             let payload = attestation.payload;
             let sig = attestation.signature;
 
@@ -192,12 +186,15 @@ pub mod Verifier {
 
             // 2. Freshness. The caller opts in with a non-zero `max_age` and
             // picks a window wide enough to absorb sequencer clock drift.
+            // `timestamp` is unix milliseconds; every clock comparison below is
+            // in seconds, on its floor.
+            let ts_sec = payload.timestamp / SELECTION_WINDOW_MS;
             if max_age != 0 {
                 let now = get_block_timestamp();
-                if payload.canonical_timestamp > now {
+                if ts_sec > now {
                     return (false, verify_codes::R_MALFORMED);
                 }
-                if now - payload.canonical_timestamp > max_age {
+                if now - ts_sec > max_age {
                     return (false, verify_codes::R_STALE);
                 }
             }
@@ -207,7 +204,7 @@ pub mod Verifier {
             if !entry.exists {
                 return (false, verify_codes::R_BAD_REGISTRY_VERSION);
             }
-            if payload.canonical_timestamp < entry.activates_at {
+            if ts_sec < entry.activates_at {
                 return (false, verify_codes::R_NOT_YET_ACTIVE);
             }
             if !entry.is_latest {
@@ -216,9 +213,8 @@ pub mod Verifier {
                 let successor = self.registry_entries.read(payload.registry_version + 1);
                 if successor.exists {
                     // Widened so the deadline cannot overflow u64.
-                    let deadline: u128 = successor.activates_at.into()
-                        + PREVIOUS_GRACE.into();
-                    if payload.canonical_timestamp.into() > deadline {
+                    let deadline: u128 = successor.activates_at.into() + PREVIOUS_GRACE.into();
+                    if ts_sec.into() > deadline {
                         return (false, verify_codes::R_VERSION_EXPIRED);
                     }
                 }
@@ -226,17 +222,15 @@ pub mod Verifier {
 
             // 4. Every signer must sit inside the round's derived selection group.
             // `group_size` cannot overflow: both terms are bounded by MAX_NODES.
-            let mut group_size: u32 = payload.signatures_required.into()
-                + entry.redundancy_buffer;
+            let mut group_size: u32 = payload.signatures_required.into() + entry.redundancy_buffer;
             if group_size > entry.node_count {
                 group_size = entry.node_count;
             }
             let seed = selection_seed(
-                payload.source_id, payload.registry_version, payload.canonical_timestamp,
+                payload.source_id, payload.registry_version, payload.timestamp,
             );
-            let selection_bitmap = match node_group_bitmap::derive(
-                seed, entry.node_count, group_size,
-            ) {
+            let selection_bitmap =
+                match node_group_bitmap::derive(seed, entry.node_count, group_size) {
                 // `None` here is an empty node set, which Solidity's
                 // `selectionOk` also reports as a quorum failure.
                 Option::None => { return (false, verify_codes::R_BAD_QUORUM); },
@@ -247,8 +241,8 @@ pub mod Verifier {
             }
 
             // 5. Plain-sum coalition key over the signers.
-            let agg_point = match self
-                ._aggregate_point(payload.registry_version, sig.signers_bitmap) {
+            let agg_point =
+                match self._aggregate_point(payload.registry_version, sig.signers_bitmap) {
                 Option::None => { return (false, verify_codes::R_BAD_AGGREGATE); },
                 Option::Some(p) => p,
             };
@@ -472,23 +466,25 @@ pub mod Verifier {
     }
 
     /// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖
-    ///                           u32(registryVersion) ‖ u64(canonicalTimestamp))
+    ///                           u32(registryVersion) ‖ u64(timestamp / 1000))
+    ///
+    /// The last field is the 1 s window index of the millisecond timestamp.
     ///
     /// 76-byte preimage. `value` and `signersBitmap` are deliberately excluded:
     /// nodes must be able to derive the selection group before the data fetch
     /// completes and before the coalition is known.
-    fn selection_seed(source_id: u256, registry_version: u32, canonical_timestamp: u64) -> u256 {
+    fn selection_seed(source_id: u256, registry_version: u32, timestamp: u64) -> u256 {
         let mut buf: ByteArray = "";
         append_u256_be(ref buf, SELECTION_SEED_PREFIX());
         append_u256_be(ref buf, source_id);
         append_u32_be(ref buf, registry_version);
-        append_u64_be(ref buf, canonical_timestamp);
+        append_u64_be(ref buf, timestamp / SELECTION_WINDOW_MS);
         keccak_bytes(@buf)
     }
 
     /// message = keccak256("MOLPHA_MESSAGE_V1" ‖ value ‖ sourceId ‖
     ///                     u32(registryVersion) ‖ u8(signaturesRequired) ‖
-    ///                     u64(canonicalTimestamp) ‖ signersBitmap)
+    ///                     u64(timestamp, unix ms) ‖ signersBitmap)
     ///
     /// 141-byte preimage. Field order and the narrow widths are shared with
     /// `VerifierLib.constructMessage`, `compute_message_hash` and the Go node
@@ -500,7 +496,7 @@ pub mod Verifier {
         append_u256_be(ref buf, payload.source_id);
         append_u32_be(ref buf, payload.registry_version);
         append_u8_be(ref buf, payload.signatures_required);
-        append_u64_be(ref buf, payload.canonical_timestamp);
+        append_u64_be(ref buf, payload.timestamp);
         append_u256_be(ref buf, signers_bitmap);
         keccak_bytes(@buf)
     }
@@ -591,11 +587,10 @@ pub mod Verifier {
                     match ec::new_point(x, y) {
                         Option::None => { ok = false; },
                         Option::Some(pt) => {
-                            acc =
-                                match acc {
-                                    Option::None => Option::Some(pt),
-                                    Option::Some(a) => Option::Some(ec::add(a, pt)),
-                                };
+                            acc = match acc {
+                                Option::None => Option::Some(pt),
+                                Option::Some(a) => Option::Some(ec::add(a, pt)),
+                            };
                         },
                     }
                 }

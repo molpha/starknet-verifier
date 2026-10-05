@@ -10,10 +10,10 @@ pipeline exactly:
 
 ```
 selectionSeed   = keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖ u32(registryVersion)
-                            ‖ u64(canonicalTimestamp))                          76 bytes
+                            ‖ u64(timestamp / 1000))                   76 bytes
 selectionBitmap = deriveWithoutReplacement(selectionSeed, nodeCount, groupSize)
 message         = keccak256("MOLPHA_MESSAGE_V1" ‖ value ‖ sourceId ‖ u32(registryVersion)
-                            ‖ u8(signaturesRequired) ‖ u64(canonicalTimestamp)
+                            ‖ u8(signaturesRequired) ‖ u64(timestamp, unix ms)
                             ‖ signersBitmap)                                   141 bytes
 X_coalition     = Σ Xᵢ   for each signer i in signersBitmap   (plain EC sum)
 challenge e     = keccak256(Pₓ ‖ Pₚ ‖ message ‖ commitment) mod Q               85 bytes

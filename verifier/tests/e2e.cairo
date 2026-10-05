@@ -17,23 +17,22 @@ use snforge_std::{
 use starknet::ContractAddress;
 use verifier::constants::{CURVE_ORDER_Q, NODE_ACTIVE, NODE_NEVER, NODE_RETIRED, PREVIOUS_GRACE};
 use verifier::interface::{
-    Attestation, IVerifierDispatcher, IVerifierDispatcherTrait, SchnorrProof, SchnorrSignature,
+    Attestation, AttestationPayload, IVerifierDispatcher, IVerifierDispatcherTrait, SchnorrProof,
+    SchnorrSignature,
 };
-use verifier::secp256k1_utils as ec;
-use verifier::verify_codes;
+use verifier::{secp256k1_utils as ec, verify_codes};
 use super::fixtures::{
-    CASE1_COMMITMENT, CASE1_EXPECTED_CODE, CASE1_EXPECTED_OK, CASE1_REG_VERSION,
-    CASE1_SIGNATURE, CASE1_SIGNERS_BITMAP, CASE1_SIGS_REQUIRED, CASE1_SOURCE_ID, CASE1_TIMESTAMP,
-    CASE1_VALUE, CASE2_COMMITMENT, CASE2_EXPECTED_CODE, CASE2_EXPECTED_OK, CASE2_REG_VERSION,
-    CASE2_SIGNATURE, CASE2_SIGNERS_BITMAP, CASE2_SIGS_REQUIRED, CASE2_SOURCE_ID, CASE2_TIMESTAMP,
-    CASE2_VALUE, NODE_COUNT, REDUNDANCY_BUFFER, TIMESTAMP, compressed, fixture_nodes,
+    CASE1_COMMITMENT, CASE1_EXPECTED_CODE, CASE1_EXPECTED_OK, CASE1_REG_VERSION, CASE1_SIGNATURE,
+    CASE1_SIGNERS_BITMAP, CASE1_SIGS_REQUIRED, CASE1_SOURCE_ID, CASE1_TIMESTAMP, CASE1_VALUE,
+    CASE2_COMMITMENT, CASE2_EXPECTED_CODE, CASE2_EXPECTED_OK, CASE2_REG_VERSION, CASE2_SIGNATURE,
+    CASE2_SIGNERS_BITMAP, CASE2_SIGS_REQUIRED, CASE2_SOURCE_ID, CASE2_TIMESTAMP, CASE2_VALUE,
+    NODE_COUNT, REDUNDANCY_BUFFER, TIMESTAMP, compressed, fixture_nodes,
 };
 use super::support::{
-    ADMIN, NO_MAX_AGE, add_key, deploy, deploy_with_params, fixture_attestation,
+    ADMIN, NO_MAX_AGE, TIMESTAMP_SECS, add_key, deploy, deploy_with_params, fixture_attestation,
     fixture_node_registration, fixture_payload, fixture_signature, negated_fixture_node,
     register_fixture_nodes, tampered_attestation,
 };
-use verifier::interface::AttestationPayload;
 
 /// Deploys and registers the full fixture node set, leaving the block clock at
 /// zero so every registry version activates at time zero.
@@ -77,7 +76,7 @@ fn verifies_evm_attestation_case_1() {
             source_id: CASE1_SOURCE_ID(),
             registry_version: CASE1_REG_VERSION,
             signatures_required: CASE1_SIGS_REQUIRED,
-            canonical_timestamp: CASE1_TIMESTAMP,
+            timestamp: CASE1_TIMESTAMP,
         },
         signature: SchnorrSignature {
             signature: CASE1_SIGNATURE(),
@@ -100,7 +99,7 @@ fn verifies_evm_attestation_case_2() {
             source_id: CASE2_SOURCE_ID(),
             registry_version: CASE2_REG_VERSION,
             signatures_required: CASE2_SIGS_REQUIRED,
-            canonical_timestamp: CASE2_TIMESTAMP,
+            timestamp: CASE2_TIMESTAMP,
         },
         signature: SchnorrSignature {
             signature: CASE2_SIGNATURE(),
@@ -205,11 +204,9 @@ fn verify_rejects_aggregate_at_infinity() {
             source_id: 2,
             registry_version: 2,
             signatures_required: 1,
-            canonical_timestamp: TIMESTAMP,
+            timestamp: TIMESTAMP,
         },
-        signature: SchnorrSignature {
-            signature: 1, commitment: 0x1, signers_bitmap: 3,
-        },
+        signature: SchnorrSignature { signature: 1, commitment: 0x1, signers_bitmap: 3 },
     };
 
     let (ok, code) = dispatcher.verify(attestation, NO_MAX_AGE);
@@ -286,8 +283,8 @@ fn max_age_zero_disables_the_freshness_check() {
     let dispatcher = deployed_with_fixture_nodes();
     let address = dispatcher.contract_address;
 
-    // Far in the future relative to the fixture's canonical timestamp.
-    start_cheat_block_timestamp(address, TIMESTAMP + 1_000_000);
+    // Far in the future relative to the fixture's timestamp.
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS + 1_000_000);
     let (ok, code) = dispatcher.verify(fixture_attestation(), NO_MAX_AGE);
     stop_cheat_block_timestamp(address);
 
@@ -299,7 +296,7 @@ fn stale_payload_is_reported_as_stale() {
     let dispatcher = deployed_with_fixture_nodes();
     let address = dispatcher.contract_address;
 
-    start_cheat_block_timestamp(address, TIMESTAMP + 100);
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS + 100);
     let (fresh_ok, fresh_code) = dispatcher.verify(fixture_attestation(), 200);
     let (stale_ok, stale_code) = dispatcher.verify(fixture_attestation(), 50);
     stop_cheat_block_timestamp(address);
@@ -310,11 +307,45 @@ fn stale_payload_is_reported_as_stale() {
 }
 
 #[test]
+fn max_age_boundary_is_inclusive_in_whole_seconds() {
+    let dispatcher = deployed_with_fixture_nodes();
+    let address = dispatcher.contract_address;
+
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS + 100);
+    let (edge_ok, edge_code) = dispatcher.verify(fixture_attestation(), 100);
+    stop_cheat_block_timestamp(address);
+    assert(edge_ok && edge_code == verify_codes::R_OK, 'age == max_age must pass');
+
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS + 101);
+    let (late_ok, late_code) = dispatcher.verify(fixture_attestation(), 100);
+    stop_cheat_block_timestamp(address);
+    assert(!late_ok && late_code == verify_codes::R_STALE, 'age > max_age must be stale');
+}
+
+#[test]
+fn payload_in_the_current_second_is_not_future() {
+    let dispatcher = deployed_with_fixture_nodes();
+    let address = dispatcher.contract_address;
+
+    // Chain clock equals the payload's whole second: not in the future.
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS);
+    let (ok, code) = dispatcher.verify(fixture_attestation(), 60);
+    stop_cheat_block_timestamp(address);
+    assert(ok && code == verify_codes::R_OK, 'same second must pass');
+
+    // One second earlier on the chain clock, the payload is dated ahead of it.
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS - 1);
+    let (early_ok, early_code) = dispatcher.verify(fixture_attestation(), 60);
+    stop_cheat_block_timestamp(address);
+    assert(!early_ok && early_code == verify_codes::R_MALFORMED, 'next second is future');
+}
+
+#[test]
 fn future_dated_payload_is_malformed() {
     let dispatcher = deployed_with_fixture_nodes();
     let address = dispatcher.contract_address;
 
-    start_cheat_block_timestamp(address, TIMESTAMP - 100);
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS - 100);
     let (ok, code) = dispatcher.verify(fixture_attestation(), 3600);
     stop_cheat_block_timestamp(address);
 
@@ -334,7 +365,7 @@ fn payload_before_version_activation_is_not_yet_active() {
     // Every registration stamps `activates_at` from the block clock, so
     // registering "after" the fixture round makes that round predate the
     // version it claims.
-    start_cheat_block_timestamp(address, TIMESTAMP + 1000);
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS + 1000);
     register_fixture_nodes(dispatcher, NODE_COUNT);
 
     let (ok, code) = dispatcher.verify(fixture_attestation(), NO_MAX_AGE);
@@ -368,7 +399,7 @@ fn superseded_version_still_verifies_inside_the_grace_window() {
     let address = dispatcher.contract_address;
 
     // Successor activates just inside `PREVIOUS_GRACE` of the payload.
-    start_cheat_block_timestamp(address, TIMESTAMP - PREVIOUS_GRACE + 1);
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS - PREVIOUS_GRACE + 1);
     start_cheat_caller_address(address, ADMIN());
     dispatcher.set_redundancy_buffer(REDUNDANCY_BUFFER);
     stop_cheat_caller_address(address);
@@ -391,7 +422,7 @@ fn changing_the_redundancy_buffer_does_not_invalidate_history() {
     let (before_ok, _) = dispatcher.verify(fixture_attestation(), NO_MAX_AGE);
     assert(before_ok, 'must verify before change');
 
-    start_cheat_block_timestamp(address, TIMESTAMP - PREVIOUS_GRACE + 1);
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS - PREVIOUS_GRACE + 1);
     start_cheat_caller_address(address, ADMIN());
     dispatcher.set_redundancy_buffer(REDUNDANCY_BUFFER + 3);
     stop_cheat_caller_address(address);
@@ -414,7 +445,7 @@ fn historical_payload_still_verifies_after_signer_removal() {
 
     // Index 7's bit is set in the fixture's signer bitmap.
     let (_, _, signer_node) = fixture_node_registration(dispatcher, 7);
-    start_cheat_block_timestamp(address, TIMESTAMP - PREVIOUS_GRACE + 1);
+    start_cheat_block_timestamp(address, TIMESTAMP_SECS - PREVIOUS_GRACE + 1);
     start_cheat_caller_address(address, ADMIN());
     dispatcher.remove_node(signer_node, 7);
     stop_cheat_caller_address(address);

@@ -22,6 +22,8 @@ const core = process.argv[2] ?? path.resolve(repo, "..", "molpha-core-contracts"
 
 const MESSAGE_PREFIX = keccak_256(Buffer.from("MOLPHA_MESSAGE_V1"));
 const SELECTION_SEED_PREFIX = keccak_256(Buffer.from("MOLPHA_SELECTION_V1"));
+// timestamp is unix milliseconds; selection reads its 1 s window index.
+const SELECTION_WINDOW_MS = 1000n;
 const SELECTION_DOMAIN = keccak_256(Buffer.from("MOLPHA_SELECTION_DERIVE"));
 
 const strip = (s) => String(s).replace(/^0x/i, "");
@@ -55,14 +57,14 @@ function messageHash(p, signersBitmap) {
     MESSAGE_PREFIX,
     hex(p.value), hex(p.sourceId),
     u32be(p.registryVersion), u8be(p.signaturesRequired),
-    ubig(p.canonicalTimestamp, 8), ubig(signersBitmap, 32),
+    ubig(p.timestamp, 8), ubig(signersBitmap, 32),
   );
 }
 
 function selectionSeed(p) {
   return keccak_256(cat(
     SELECTION_SEED_PREFIX, hex(p.sourceId),
-    u32be(p.registryVersion), ubig(p.canonicalTimestamp, 8),
+    u32be(p.registryVersion), ubig(BigInt(p.timestamp) / SELECTION_WINDOW_MS, 8),
   ));
 }
 
@@ -166,7 +168,7 @@ w(`pub const REG_VERSION: u32 = ${d.registryVersion};`);
 w(`pub const SIGS_REQUIRED: u8 = ${d.signaturesRequired};`);
 w(`pub const REDUNDANCY_BUFFER: u32 = ${buffer};`);
 w(`pub const NODE_COUNT: u32 = ${nodeCount};`);
-w(`pub const TIMESTAMP: u64 = ${d.canonicalTimestamp};`);
+w(`pub const TIMESTAMP: u64 = ${d.timestamp};`);
 w(`pub const SIGNERS_BITMAP: u256 = ${s.signersBitmap};`);
 w(`pub const COMMITMENT: felt252 = 0x${strip(s.commitment).toLowerCase()};`);
 w();
@@ -212,7 +214,7 @@ cases.forEach((c, i) => {
   w(`/// \`${c.name}\` (kind ${c.kind}): expects (${c.expected.verifyOk}, ${c.expected.verifyCode}).`);
   w(`pub const CASE${n}_REG_VERSION: u32 = ${c.payload.registryVersion};`);
   w(`pub const CASE${n}_SIGS_REQUIRED: u8 = ${c.payload.signaturesRequired};`);
-  w(`pub const CASE${n}_TIMESTAMP: u64 = ${c.payload.canonicalTimestamp};`);
+  w(`pub const CASE${n}_TIMESTAMP: u64 = ${c.payload.timestamp};`);
   w(`pub const CASE${n}_SIGNERS_BITMAP: u256 = ${c.sig.signersBitmap};`);
   w(`pub const CASE${n}_COMMITMENT: felt252 = 0x${strip(c.sig.commitment).toLowerCase()};`);
   w(`pub const CASE${n}_EXPECTED_OK: bool = ${c.expected.verifyOk};`);

@@ -14,9 +14,9 @@ pub const REG_VERSION: u32 = 12;
 pub const SIGS_REQUIRED: u8 = 5;
 pub const REDUNDANCY_BUFFER: u32 = 2;
 pub const NODE_COUNT: u32 = 12;
-pub const TIMESTAMP: u64 = 1700034927;
+pub const TIMESTAMP: u64 = 1700034927000;
 pub const SIGNERS_BITMAP: u256 = 2032;
-pub const COMMITMENT: felt252 = 0xaff31ae9e8f7624c9f8c149f1f12bb00f1606c10;
+pub const COMMITMENT: felt252 = 0xec61e25b5a06f0a3f9048356b23e98cf775974b9;
 
 pub fn SOURCE_ID() -> u256 {
     u256 { high: 0x93893838ba3cf2a46fc061b4c3acfba3, low: 0x435fa61b0c29017fe78280146255b604 }
@@ -25,10 +25,10 @@ pub fn VALUE() -> u256 {
     u256 { high: 0xc6d8f1c0fdb8997313cbc4bc43b46af7, low: 0x8589ba4bb9036707097db8b33879d6c6 }
 }
 pub fn SIGNATURE() -> u256 {
-    u256 { high: 0x9f52f4fd6b2f82086803269007cbda35, low: 0xcf024c40af57160b7472817e2691ef73 }
+    u256 { high: 0x956e684ea6710c54bb7d5b0b3256e1c2, low: 0xd1e77cc84607ad575b5f95fdd210aac6 }
 }
 pub fn MESSAGE() -> u256 {
-    u256 { high: 0xa3e58f5c157c98cad4fd8478fd39b18d, low: 0xa85f4ad2d581db06b724f53b55afc5b3 }
+    u256 { high: 0x58489d3ded5f129c6fca09a174ff0dcf, low: 0x35c58f70c560e2d5ce538ef10c3bbb3e }
 }
 pub fn SELECTION_SEED() -> u256 {
     u256 { high: 0x3681e4e646690a473cd3594c9edca11e, low: 0xe038363ee745177d9314388892f05a93 }
@@ -122,9 +122,9 @@ pub fn compressed(prefix: u8, x: u256) -> ByteArray {
 /// `kindA-int256` (kind A): expects (true, 0).
 pub const CASE1_REG_VERSION: u32 = 12;
 pub const CASE1_SIGS_REQUIRED: u8 = 5;
-pub const CASE1_TIMESTAMP: u64 = 1700000000;
+pub const CASE1_TIMESTAMP: u64 = 1700000000000;
 pub const CASE1_SIGNERS_BITMAP: u256 = 339;
-pub const CASE1_COMMITMENT: felt252 = 0x4a4eea2ec80f98472b13fd4787e671e7a233bc5d;
+pub const CASE1_COMMITMENT: felt252 = 0x2d91b53b7dae92b3731d690efc315f2695bb0975;
 pub const CASE1_EXPECTED_OK: bool = true;
 pub const CASE1_EXPECTED_CODE: u8 = 0;
 pub fn CASE1_SOURCE_ID() -> u256 {
@@ -134,18 +134,18 @@ pub fn CASE1_VALUE() -> u256 {
     u256 { high: 0xffffffffffffffffffffffffffffffff, low: 0xfffffffffffffffffffffffffffffb2e }
 }
 pub fn CASE1_SIGNATURE() -> u256 {
-    u256 { high: 0xc9dc93909c0274b7a84f6c82fd795b5a, low: 0x47b3c5d2e5d6a00b8c1605c456e7ff78 }
+    u256 { high: 0x8d0597c6d418a8c6397ad832cda1ed2d, low: 0x1d55e2777943bb5ca83160ba9118a4fd }
 }
 pub fn CASE1_MESSAGE() -> u256 {
-    u256 { high: 0x840185b8abb1635e5e5f94df05e794c4, low: 0x708657c6a3a2cd354c0158dc91addeab }
+    u256 { high: 0x1f081c05ef4dfa658a55dd6e80cd70c3, low: 0x4710fce23b771a3422ac079aa09c8da8 }
 }
 
 /// `kindB-tuple` (kind B): expects (true, 0).
 pub const CASE2_REG_VERSION: u32 = 12;
 pub const CASE2_SIGS_REQUIRED: u8 = 5;
-pub const CASE2_TIMESTAMP: u64 = 1700000000;
+pub const CASE2_TIMESTAMP: u64 = 1700000000000;
 pub const CASE2_SIGNERS_BITMAP: u256 = 339;
-pub const CASE2_COMMITMENT: felt252 = 0x616c24cf7c587aaf2f240da3b09ad572e7da4d8c;
+pub const CASE2_COMMITMENT: felt252 = 0x3b7d9f9859a5aaac41557a21c2b610dbf785207f;
 pub const CASE2_EXPECTED_OK: bool = true;
 pub const CASE2_EXPECTED_CODE: u8 = 0;
 pub fn CASE2_SOURCE_ID() -> u256 {
@@ -155,8 +155,8 @@ pub fn CASE2_VALUE() -> u256 {
     u256 { high: 0x47869257dae795e85b30cb6a0ac7f82f, low: 0xe977ec5ced28d96a70f3fe2cb514ff1a }
 }
 pub fn CASE2_SIGNATURE() -> u256 {
-    u256 { high: 0x0738bfdd9ef4a3e7438f6497c08c0e40, low: 0x1e38944b3a41ee3fd9a7545e93a7826b }
+    u256 { high: 0xaa61b446b25fbd7a0c35f58394df91c9, low: 0x709ff7065612986602b895dc929d267c }
 }
 pub fn CASE2_MESSAGE() -> u256 {
-    u256 { high: 0x0c9f7a402576e4df66820f04379b9203, low: 0x9b9629b872d40aec0b3ec77d6b031a48 }
+    u256 { high: 0x73e42f102997909d3a191cfbf210efba, low: 0x1564f263847b527fe8472784ff070965 }
 }

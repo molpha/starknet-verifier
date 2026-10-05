@@ -9,13 +9,13 @@
 //!
 //!   message    = keccak256("MOLPHA_MESSAGE_V1" ‖ value ‖ sourceId ‖
 //!                          u32(registryVersion) ‖ u8(signaturesRequired) ‖
-//!                          u64(canonicalTimestamp) ‖ signersBitmap)
+//!                          u64(timestamp, unix ms) ‖ signersBitmap)
 //!   challenge  = keccak256(Pₓ ‖ Pₚ ‖ message ‖ commitment) mod Q
 //!   accept iff  ethAddress(s·G − challenge·P) == commitment
 //!
 //! where `P` is the plain EC sum of the selected signers' public keys. The
 //! message preimage is 141 bytes; the field order and the narrow widths of
-//! `registryVersion`, `signaturesRequired` and `canonicalTimestamp` are load
+//! `registryVersion`, `signaturesRequired` and `timestamp` are load
 //! bearing and shared with `VerifierLib.constructMessage` (EVM),
 //! `compute_message_hash` (Rust) and `buildMessage` (Go node client). Never
 //! reorder or widen a field without a coordinated cross-VM release.
@@ -32,12 +32,12 @@
 //! (32 bytes). PoP is checked only at registration and is never part of
 //! `verify`, so this does not affect cross-chain payload verification.
 
-pub mod constants;
-pub mod verify_codes;
-pub mod byte_utils;
 pub mod bitmap;
-pub mod node_group_bitmap;
-pub mod secp256k1_utils;
-pub mod schnorr;
+pub mod byte_utils;
+pub mod constants;
 pub mod interface;
+pub mod node_group_bitmap;
+pub mod schnorr;
+pub mod secp256k1_utils;
 pub mod verifier;
+pub mod verify_codes;
