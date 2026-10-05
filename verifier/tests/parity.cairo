@@ -10,14 +10,14 @@
 use verifier::byte_utils::{
     append_u256_be, append_u32_be, append_u64_be, append_u8_be, keccak_bytes,
 };
-use verifier::constants::{MESSAGE_PREFIX, SELECTION_SEED_PREFIX};
-use verifier::secp256k1_utils as ec;
-use verifier::{node_group_bitmap, schnorr};
+use verifier::constants::{MESSAGE_PREFIX, SELECTION_SEED_PREFIX, SELECTION_WINDOW_MS};
+use verifier::{node_group_bitmap, schnorr, secp256k1_utils as ec};
 use super::fixtures::{
     AGG_X, AGG_Y, COMMITMENT, MESSAGE, NODE_COUNT, REDUNDANCY_BUFFER, REG_VERSION, SELECTION_SEED,
     SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED, SOURCE_ID, TIMESTAMP, VALUE, compressed,
     fixture_nodes,
 };
+use super::support::selection_seed;
 
 #[test]
 fn keccak_is_evm_compatible() {
@@ -37,13 +37,25 @@ fn keccak_is_evm_compatible() {
 #[test]
 fn selection_seed_encoding_matches_evm() {
     // keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖ u32 registryVersion
-    //           ‖ u64 canonicalTimestamp) — 76 bytes.
+    //           ‖ u64 timestamp / 1000) — 76 bytes. The timestamp is unix
+    // milliseconds; the seed reads its 1 s window index.
     let mut buf: ByteArray = "";
     append_u256_be(ref buf, SELECTION_SEED_PREFIX());
     append_u256_be(ref buf, SOURCE_ID());
     append_u32_be(ref buf, REG_VERSION);
-    append_u64_be(ref buf, TIMESTAMP);
+    append_u64_be(ref buf, TIMESTAMP / SELECTION_WINDOW_MS);
     assert(keccak_bytes(@buf) == SELECTION_SEED(), 'selection seed mismatch');
+}
+
+#[test]
+fn selection_seed_reads_only_the_one_second_window() {
+    let base = selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP);
+    assert(selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP + 1) == base, '+1 ms same window');
+    assert(
+        selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP + 999) == base, '+999 ms same window',
+    );
+    assert(selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP + 1000) != base, 'next window');
+    assert(selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP - 1) != base, 'previous window');
 }
 
 /// The canonical 141-byte preimage, rebuilt here independently of the contract.
@@ -62,7 +74,7 @@ fn evm_message_preimage() -> ByteArray {
 #[test]
 fn message_encoding_matches_evm() {
     // keccak256("MOLPHA_MESSAGE_V1" ‖ value ‖ sourceId ‖ u32 registryVersion
-    //           ‖ u8 signaturesRequired ‖ u64 canonicalTimestamp ‖ signersBitmap)
+    //           ‖ u8 signaturesRequired ‖ u64 timestamp (unix ms) ‖ signersBitmap)
     let buf = evm_message_preimage();
     assert(buf.len() == 141, 'preimage not 141 bytes');
     assert(keccak_bytes(@buf) == MESSAGE(), 'message mismatch');
@@ -109,17 +121,17 @@ fn message_encoding_is_sensitive_to_field_widths() {
 
 #[test]
 fn message_encoding_is_sensitive_to_field_order() {
-    // The pre-#23 layout this contract used to implement. It is a valid keccak
-    // of a valid preimage; it is simply not the one anyone signs.
-    let mut legacy: ByteArray = "";
-    append_u256_be(ref legacy, MESSAGE_PREFIX());
-    append_u256_be(ref legacy, SOURCE_ID());
-    append_u32_be(ref legacy, REG_VERSION);
-    append_u32_be(ref legacy, SIGS_REQUIRED.into());
-    append_u256_be(ref legacy, SIGNERS_BITMAP);
-    append_u256_be(ref legacy, VALUE());
-    append_u64_be(ref legacy, TIMESTAMP);
-    assert(keccak_bytes(@legacy) != MESSAGE(), 'legacy order must differ');
+    // A reordered preimage is a valid keccak of a valid preimage; it is simply not the one
+    // anyone signs.
+    let mut reordered: ByteArray = "";
+    append_u256_be(ref reordered, MESSAGE_PREFIX());
+    append_u256_be(ref reordered, SOURCE_ID());
+    append_u32_be(ref reordered, REG_VERSION);
+    append_u32_be(ref reordered, SIGS_REQUIRED.into());
+    append_u256_be(ref reordered, SIGNERS_BITMAP);
+    append_u256_be(ref reordered, VALUE());
+    append_u64_be(ref reordered, TIMESTAMP);
+    assert(keccak_bytes(@reordered) != MESSAGE(), 'field order must matter');
 }
 
 #[test]
@@ -137,9 +149,12 @@ fn derive_reports_empty_node_set_instead_of_panicking() {
     // `verify` must never panic, so the sampler reports bad parameters as a
     // value. An empty node set is the reachable case: a registry version that
     // exists but holds no keys.
-    assert(node_group_bitmap::derive(SELECTION_SEED(), 0, 0).is_none(), 'zero nodes should be None');
     assert(
-        node_group_bitmap::derive(SELECTION_SEED(), 4, 5).is_none(), 'oversized group should be None',
+        node_group_bitmap::derive(SELECTION_SEED(), 0, 0).is_none(), 'zero nodes should be None',
+    );
+    assert(
+        node_group_bitmap::derive(SELECTION_SEED(), 4, 5).is_none(),
+        'oversized group should be None',
     );
 }
 
@@ -155,11 +170,10 @@ fn decompress_and_aggregate_matches_evm() {
             let (prefix, x, _sk) = *nodes.at(i);
             let (px, py) = ec::decompress(@compressed(prefix, x));
             let pt = ec::new_point(px, py).unwrap();
-            acc =
-                match acc {
-                    Option::None => Option::Some(pt),
-                    Option::Some(a) => Option::Some(ec::add(a, pt)),
-                };
+            acc = match acc {
+                Option::None => Option::Some(pt),
+                Option::Some(a) => Option::Some(ec::add(a, pt)),
+            };
         }
         i += 1;
     }
@@ -217,20 +231,18 @@ fn pop_digest_matches_the_registration_script() {
     append_u256_be(ref buf, verifier::constants::POP_DOMAIN());
     append_u256_be(
         ref buf,
-        u256 {
-            high: 0x0123456789abcdef0123456789abcdef, low: 0x0123456789abcdef0123456789abcdef,
-        },
+        u256 { high: 0x0123456789abcdef0123456789abcdef, low: 0x0123456789abcdef0123456789abcdef },
     );
     buf.append_byte(2);
     append_u256_be(
         ref buf,
-        u256 {
-            high: 0x11111111111111111111111111111111, low: 0x11111111111111111111111111111111,
-        },
+        u256 { high: 0x11111111111111111111111111111111, low: 0x11111111111111111111111111111111 },
     );
 
     assert(
-        keccak_bytes(@buf) == u256 {
+        keccak_bytes(
+            @buf,
+        ) == u256 {
             high: 0x9ba95d384378425ac25a998a4737701b, low: 0x21f02e85aeff1a163d6046629b94eac5,
         },
         'pop digest mismatch',

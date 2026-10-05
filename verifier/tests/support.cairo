@@ -7,24 +7,25 @@ use snforge_std::{
     stop_cheat_caller_address,
 };
 use starknet::ContractAddress;
-use verifier::bitmap;
 use verifier::byte_utils::{append_u256_be, append_u32_be, append_u64_be, keccak_bytes};
-use verifier::constants::{CURVE_ORDER_Q, POP_DOMAIN, SELECTION_SEED_PREFIX};
+use verifier::constants::{CURVE_ORDER_Q, POP_DOMAIN, SELECTION_SEED_PREFIX, SELECTION_WINDOW_MS};
 use verifier::interface::{
     Attestation, AttestationPayload, IVerifierDispatcher, IVerifierDispatcherTrait, SchnorrProof,
     SchnorrSignature,
 };
-use verifier::node_group_bitmap;
-use verifier::schnorr;
-use verifier::secp256k1_utils as ec;
+use verifier::{bitmap, node_group_bitmap, schnorr, secp256k1_utils as ec};
 use super::fixtures::{
-    COMMITMENT, REDUNDANCY_BUFFER, REG_VERSION, SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED,
-    SOURCE_ID, TIMESTAMP, VALUE, compressed, fixture_nodes,
+    COMMITMENT, REDUNDANCY_BUFFER, REG_VERSION, SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED, SOURCE_ID,
+    TIMESTAMP, VALUE, compressed, fixture_nodes,
 };
 
 /// `verify`'s freshness check is opt-in; tests that are not about staleness
 /// pass this to skip it, exactly as a consumer with no freshness policy would.
 pub const NO_MAX_AGE: u64 = 0;
+
+/// The fixture's `timestamp` is unix milliseconds; the block clock, `max_age` and
+/// registry activation are seconds. Tests that move the clock use this.
+pub const TIMESTAMP_SECS: u64 = TIMESTAMP / 1000;
 
 pub fn ADMIN() -> ContractAddress {
     0x00ad3119.try_into().unwrap()
@@ -158,13 +159,14 @@ pub fn fixture_node_registration(
     (comp, pop, node)
 }
 
-/// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖ registryVersion ‖ timestamp)
-pub fn selection_seed(source_id: u256, registry_version: u32, canonical_timestamp: u64) -> u256 {
+/// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖ registryVersion ‖ timestamp /
+/// 1000)
+pub fn selection_seed(source_id: u256, registry_version: u32, timestamp: u64) -> u256 {
     let mut buf: ByteArray = "";
     append_u256_be(ref buf, SELECTION_SEED_PREFIX());
     append_u256_be(ref buf, source_id);
     append_u32_be(ref buf, registry_version);
-    append_u64_be(ref buf, canonical_timestamp);
+    append_u64_be(ref buf, timestamp / SELECTION_WINDOW_MS);
     keccak_bytes(@buf)
 }
 
@@ -221,7 +223,7 @@ pub fn bench_verify_attestation(signer_count: u32) -> Attestation {
             source_id: SOURCE_ID(),
             registry_version: node_count,
             signatures_required,
-            canonical_timestamp: TIMESTAMP,
+            timestamp: TIMESTAMP,
         },
         // Non-zero placeholder; the Schnorr check still runs at full cost.
         signature: SchnorrSignature { signature: 1, commitment: 0x1, signers_bitmap },
@@ -248,7 +250,7 @@ pub fn fixture_payload() -> AttestationPayload {
         source_id: SOURCE_ID(),
         registry_version: REG_VERSION,
         signatures_required: SIGS_REQUIRED,
-        canonical_timestamp: TIMESTAMP,
+        timestamp: TIMESTAMP,
     }
 }
 

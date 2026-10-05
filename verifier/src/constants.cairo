@@ -42,6 +42,11 @@ pub fn SELECTION_DOMAIN() -> u256 {
     u256 { high: 0x492848fe5e85d4ce2231d693a58f0820, low: 0xa4056e2822fe5dcad7c756afe044b70b }
 }
 
+/// Milliseconds per selection window. `timestamp` is unix milliseconds; committee
+/// selection reads only `timestamp / SELECTION_WINDOW_MS`, so sub-second precision never
+/// changes who is selected. Changing it is a consensus break and must bump the selection prefix.
+pub const SELECTION_WINDOW_MS: u64 = 1000;
+
 /// Maximum number of registered nodes (fits one 256-bit bitmap).
 pub const MAX_NODES: u32 = 256;
 

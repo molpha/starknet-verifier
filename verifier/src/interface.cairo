@@ -38,7 +38,7 @@ pub struct AttestationPayload {
     pub source_id: u256,
     pub registry_version: u32,
     pub signatures_required: u8,
-    pub canonical_timestamp: u64,
+    pub timestamp: u64,
 }
 
 /// A payload and the aggregate signature over it.
@@ -60,9 +60,7 @@ pub trait IVerifier<TContractState> {
     /// `max_age` is the caller's freshness window in seconds. `0` disables the
     /// check entirely — which is not a neutral default, since a stateless
     /// verifier accepts a correctly signed payload forever.
-    fn verify(
-        self: @TContractState, attestation: Attestation, max_age: u64,
-    ) -> (bool, u8);
+    fn verify(self: @TContractState, attestation: Attestation, max_age: u64) -> (bool, u8);
 
     /// Registers a node from its 33-byte compressed pubkey, gated by a Schnorr
     /// proof-of-possession over the registration domain. Admin only.

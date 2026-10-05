@@ -29,8 +29,7 @@
 
 use snforge_std::{start_cheat_caller_address, stop_cheat_caller_address};
 use verifier::interface::IVerifierDispatcherTrait;
-use verifier::secp256k1_utils as ec;
-use verifier::verify_codes;
+use verifier::{secp256k1_utils as ec, verify_codes};
 use super::fixtures::{NODE_COUNT, compressed, fixture_nodes};
 use super::support::{
     ADMIN, BENCH_NODE_COUNT, NO_MAX_AGE, call_verify_bench, deploy, fixture_attestation,

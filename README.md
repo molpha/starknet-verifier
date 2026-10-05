@@ -95,7 +95,7 @@ message = keccak256(
     sourceId                         32
     registryVersion       uint32 BE   4
     signaturesRequired    uint8        1
-    canonicalTimestamp    uint64 BE    8
+    timestamp             uint64 BE    8   (unix MILLISECONDS)
     signersBitmap         uint256 BE  32
 )                                   = 141 bytes
 
@@ -124,7 +124,7 @@ Code	Meaning
 7	Signer set is not within the round's derived selection group
 8	Aggregate public key is the point at infinity
 9	Schnorr signature invalid
-10	Payload older than the caller's `max_age`
+10	Payload older than the caller's `max_age` (seconds, compared on `timestamp / 1000`)
 
 Codes 1 and 6 are reserved for mechanisms this implementation does not have; they
 exist so the numbering can never shift under them.
