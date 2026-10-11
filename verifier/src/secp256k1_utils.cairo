@@ -16,7 +16,8 @@ pub fn new_point(x: u256, y: u256) -> Option<Secp256k1Point> {
 
 /// Recovers a point from `x` with the given y-parity (`true` = odd y).
 pub fn point_from_x(x: u256, y_parity: bool) -> Option<Secp256k1Point> {
-    Secp256Trait::<Secp256k1Point>::secp256_ec_get_point_from_x_syscall(x, y_parity).unwrap_syscall()
+    Secp256Trait::<Secp256k1Point>::secp256_ec_get_point_from_x_syscall(x, y_parity)
+        .unwrap_syscall()
 }
 
 /// The secp256k1 generator point G.

@@ -12,11 +12,14 @@
 //! is mathematically identical: the EVM `ecrecover` recovers exactly that point.
 
 use starknet::secp256k1::Secp256k1Point;
-use crate::byte_utils::{append_address_be, append_u256_be, keccak_bytes};
+use crate::byte_utils::{append_address_be, append_u256_be, is_address_sized, keccak_bytes};
 use crate::constants::CURVE_ORDER_Q;
 use crate::secp256k1_utils as ec;
 
 /// challenge = keccak256(Pₓ ‖ Pₚ ‖ message ‖ commitment) mod Q
+///
+/// 85-byte preimage. `commitment` must already be address-sized; see
+/// `byte_utils::is_address_sized`.
 pub fn challenge(px: u256, parity: u8, message: u256, commitment: felt252) -> u256 {
     let mut buf: ByteArray = "";
     append_u256_be(ref buf, px);
@@ -29,7 +32,8 @@ pub fn challenge(px: u256, parity: u8, message: u256, commitment: felt252) -> u2
 /// Verifies a Schnorr signature for the public key at `(px, py)` without the
 /// defensive on-curve / range guards. Equivalent to
 /// `LibSchnorr.verifySignatureTrusted`. Caller must ensure `signature != 0`,
-/// `commitment != 0`, and that `(px, py)` is a valid curve point.
+/// `commitment` is non-zero and address-sized, and that `(px, py)` is a valid
+/// curve point.
 pub fn verify_trusted(
     px: u256, py: u256, message: u256, signature: u256, commitment: felt252,
 ) -> bool {
@@ -40,7 +44,7 @@ pub fn verify_trusted(
 /// `LibSchnorr.verifySignature` (used for proof-of-possession at registration):
 /// rejects zero signature/commitment, off-curve keys, and `s >= Q`.
 pub fn verify(px: u256, py: u256, message: u256, signature: u256, commitment: felt252) -> bool {
-    if signature == 0 || commitment == 0 {
+    if signature == 0 || commitment == 0 || !is_address_sized(commitment) {
         return false;
     }
     match ec::new_point(px, py) {

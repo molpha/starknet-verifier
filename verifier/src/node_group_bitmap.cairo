@@ -83,19 +83,25 @@ fn sample_without_replacement(seed: u256, n_count: u32, group_size: u32) -> u256
 }
 
 /// Derives the selection bitmap. Equivalent to `NodeGroupBitmapLib.derive`.
-pub fn derive(seed: u256, n_count: u32, group_size: u32) -> u256 {
-    assert(n_count != 0, 'nodeCount is zero');
-    assert(n_count <= 256, 'nCount exceeds 256');
-    assert(group_size <= n_count, 'groupSize exceeds nodeCount');
+///
+/// Returns `None` for parameters the EVM library reverts on. `Verifier.verify`
+/// must never panic, and an empty node set is genuinely reachable there (a
+/// registry version with no nodes), so the failure is a value rather than a
+/// trap; the caller maps it to `R_BAD_QUORUM`, which is what Solidity's
+/// `selectionOk` returns in the same situation.
+pub fn derive(seed: u256, n_count: u32, group_size: u32) -> Option<u256> {
+    if n_count == 0 || n_count > 256 || group_size > n_count {
+        return Option::None;
+    }
     if group_size == 0 {
-        return 0;
+        return Option::Some(0);
     }
     if group_size == n_count {
-        return full_mask(n_count);
+        return Option::Some(full_mask(n_count));
     }
     if group_size > n_count / 2 {
         let excluded = sample_without_replacement(seed, n_count, n_count - group_size);
-        return full_mask(n_count) ^ excluded;
+        return Option::Some(full_mask(n_count) ^ excluded);
     }
-    sample_without_replacement(seed, n_count, group_size)
+    Option::Some(sample_without_replacement(seed, n_count, group_size))
 }

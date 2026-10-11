@@ -12,8 +12,10 @@ import { Point, getPublicKey } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 
 const { n: Q, p: FIELD_P } = Point.CURVE();
+// keccak256("MOLPHA_VERIFIER_V1") — must match `constants::POP_DOMAIN` in the
+// contract and `POP_DOMAIN` in Verifier.sol.
 const POP_DOMAIN =
-  0x0c067655ca151011944be1779cde5916c870c6e7b5c5db50ef488d63d7d1ff31n;
+  0x789b999d1d38ea94308dd6904bfa70cf9ee14dd2b978fb6d2c894c9c84150a04n;
 
 function parseHex(value, name) {
   const s = value.startsWith("0x") ? value.slice(2) : value;

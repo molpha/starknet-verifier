@@ -1,5 +1,6 @@
-mod fixtures;
-mod support;
-mod parity;
-mod e2e;
 mod benchmarks;
+mod curve_assumptions;
+mod e2e;
+mod fixtures;
+mod parity;
+mod support;
