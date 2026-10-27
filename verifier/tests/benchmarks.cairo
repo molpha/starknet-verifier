@@ -14,18 +14,13 @@
 //! place to update when they move.
 //!
 //! Signer-scaling benchmarks (`bench_verify_N_signers`) use deterministic
-//! payloads that pass every structural and selection check; the signature bytes
-//! are placeholders, so the full aggregation + Schnorr path is still measured
-//! and the call ends in `R_BAD_SIGNATURE`.
+//! payloads whose signers are the lowest N live slots; the signature bytes are
+//! placeholders, so the full aggregation + Schnorr path is still measured and
+//! the call ends in `R_BAD_SIGNATURE`.
 //!
-//! Setup: 18-node registry, redundancy_buffer from the fixture, EVM fixture
-//! source_id/timestamp. `signatures_required` = 3 for ≤5 signers, else
-//! `signer_count - buffer`; `group_size` = min(signatures_required + buffer, 18),
-//! matching the contract.
-//!
-//! Cost is not linear in signer count: `node_group_bitmap::derive` takes a
-//! different branch when `group_size ≤ n/2`, `> n/2`, or `= n`. Aggregation and
-//! Schnorr dominate, but the selection path shifts the total.
+//! Setup: 18-node registry, EVM fixture source_id/timestamp.
+//! `signatures_required` = 3 for ≤5 signers, else `signer_count - 2`. Committee
+//! selection is not part of verification, so the cost is aggregation and Schnorr.
 
 use snforge_std::{start_cheat_caller_address, stop_cheat_caller_address};
 use verifier::interface::IVerifierDispatcherTrait;
@@ -124,20 +119,8 @@ fn bench_remove_node() {
     dispatcher.remove_node(removed_id, removed_index);
     stop_cheat_caller_address(address);
 
-    assert(dispatcher.get_total_nodes() == NODE_COUNT - 1, 'one fewer node');
-}
-
-#[test]
-fn bench_set_redundancy_buffer() {
-    let dispatcher = deploy();
-    register_fixture_nodes(dispatcher, NODE_COUNT);
-    let address = dispatcher.contract_address;
-
-    start_cheat_caller_address(address, ADMIN());
-    dispatcher.set_redundancy_buffer(4);
-    stop_cheat_caller_address(address);
-
-    assert(dispatcher.get_redundancy_buffer() == 4, 'buffer updated');
+    // Index 4 is a hole now, not the last slot, so the slot count stays.
+    assert(dispatcher.get_total_nodes() == NODE_COUNT, 'hole left in place');
 }
 
 #[test]

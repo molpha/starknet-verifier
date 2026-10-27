@@ -12,7 +12,6 @@ use verifier::byte_utils::append_u256_be;
 // ---- 12-node round (fixture.json) ----
 pub const REG_VERSION: u32 = 12;
 pub const SIGS_REQUIRED: u8 = 5;
-pub const REDUNDANCY_BUFFER: u32 = 2;
 pub const NODE_COUNT: u32 = 12;
 pub const TIMESTAMP: u64 = 1700034927000;
 pub const SIGNERS_BITMAP: u256 = 2032;
@@ -29,9 +28,6 @@ pub fn SIGNATURE() -> u256 {
 }
 pub fn MESSAGE() -> u256 {
     u256 { high: 0x58489d3ded5f129c6fca09a174ff0dcf, low: 0x35c58f70c560e2d5ce538ef10c3bbb3e }
-}
-pub fn SELECTION_SEED() -> u256 {
-    u256 { high: 0x3681e4e646690a473cd3594c9edca11e, low: 0xe038363ee745177d9314388892f05a93 }
 }
 pub fn AGG_X() -> u256 {
     u256 { high: 0xd210d01d70b5367d3e6b0bc245fd3592, low: 0xbf8ef9cb9b8cca64f932fb541831f34f }

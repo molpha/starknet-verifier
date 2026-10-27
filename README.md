@@ -52,7 +52,7 @@ Features
 * Cross-chain compatible payload format
 * Threshold Schnorr signature verification
 * Historical registry versioning
-* Deterministic signer selection
+* Stable registry slots (a removed node leaves a hole; nobody else moves)
 * Aggregate public key reconstruction
 * Proof-of-Possession (PoP) node registration
 * Stateless verification API
@@ -121,7 +121,7 @@ Code	Meaning
 3	Malformed input
 4	Registry version not yet active at this timestamp
 5	Registry version expired (superseded, past the 60s grace window)
-7	Signer set is not within the round's derived selection group
+7	A signer bit names no registered node (past the last slot, or on a removed node's slot)
 8	Aggregate public key is the point at infinity
 9	Schnorr signature invalid
 10	Payload older than the caller's `max_age` (seconds, compared on `timestamp / 1000`)
@@ -183,7 +183,7 @@ The repository includes tests for:
 * Proof-of-Possession validation
 * Aggregate public key reconstruction
 * Payload tampering
-* Message and selection-seed encoding, including field width and order sensitivity
+* Message encoding, including field width and order sensitivity
 * Reason-code parity with the EVM verifier
 * Totality: `verify` returns a code rather than panicking, on any calldata
 * Cross-chain parity against the EVM golden vectors
@@ -200,30 +200,27 @@ Benchmarks
 
 L2 gas measured with snforge 0.61 (`snforge test benchmarks --gas-report`).
 
-Baseline fixture: 12 nodes, redundancy_buffer=2, signatures_required=5, 7 signers in bitmap.
+Baseline fixture: 12 nodes, signatures_required=5, 7 signers in bitmap. Committee selection is no longer part of `verify`, so the figures below are measured without it; the previous figures (selection enforced) were verify 25.07M, add_node (12th) 26.94M, remove_node 7.54M.
 
 Operation	L2 gas
-verify (success)	~25,063,482
-verify (tampered)	~25,063,582
-add_node (first)	~23,478,776
-add_node (12th)	~26,936,856
-remove_node	~7,536,244
-set_redundancy_buffer	~7,700,000
-get_total_nodes	~128,620
-get_aggregate_key	~115,980
+verify (success)	~22,176,448
+verify (tampered)	~22,176,548
+add_node (first)	~23,441,056
+add_node (12th)	~27,356,106
+remove_node (slot 4 of 12)	~6,148,007
 
-`add_node`, `remove_node` and `set_redundancy_buffer` each publish a new registry version and copy the previous key set forward, so their cost grows with registry size. That is the price of keeping every historical snapshot immutable.
+`add_node` and `remove_node` each publish a new registry version and copy the previous key set forward, so their cost grows with registry size. That is the price of keeping every historical snapshot immutable. `add_node` also scans for the lowest free slot (one extra pair of reads per slot), which is where its small increase comes from.
 
-Verify cost vs signer count (18-node registry):
+Verify cost vs signer count (18-node registry, signers are the lowest N live slots):
 
-Signers	L2 gas	group_size
-3	24,356,212	5
-5	24,804,224	5
-9	27,205,437	9
-12	26,273,794	12
-18	25,566,201	18
+Signers	L2 gas
+3	21,344,994
+5	21,745,016
+9	22,544,790
+12	23,144,688
+18	24,344,484
 
-Cost is not strictly linear in signer count: signer selection uses different algorithms depending on group size relative to the registry, while aggregation and Schnorr verification dominate overall cost.
+Cost grows with the signer count, because aggregation and Schnorr verification are all that is left.
 
 Re-run from `verifier/`:
 
@@ -232,38 +229,6 @@ snforge test bench_gas_snapshot --gas-report
 snforge test bench_verify_signer_scaling --gas-report
 
 ⸻
-
-Benchmarks
-
-L2 gas measured with snforge 0.61 (`snforge test benchmarks --gas-report`).
-
-Baseline fixture: 10 nodes, redundancy_buffer=2, signatures_required=3, 5 signers in bitmap.
-
-Operation	L2 gas
-verify (success)	~24,711,400
-verify (tampered)	~24,711,500
-add_node (first)	~22,751,716
-add_node (10th)	~25,626,976
-remove_node	~5,068,667
-get_total_nodes	~48,770
-get_aggregate_key	~115,980
-
-Verify cost vs signer count (18-node registry):
-
-Signers	L2 gas	group_size
-3	24,469,138	5
-5	24,871,970	5
-9	27,487,149	9
-12	26,560,466	12
-18	25,540,671	18
-
-Cost is not strictly linear in signer count: signer selection uses different algorithms depending on group size relative to the registry, while aggregation and Schnorr verification dominate overall cost.
-
-Re-run from `verifier/`:
-
-scarb run bench
-snforge test bench_gas_snapshot --gas-report
-snforge test bench_verify_signer_scaling --gas-report
 
 ⸻
 
@@ -273,7 +238,6 @@ Configure your environment:
 
 export STARKNET_RPC_URL=...
 export PROTOCOL_ADMIN=...          # constructor admin address
-export REDUNDANCY_BUFFER=2         # optional, 0..256, default 2
 
 The deploying account comes from your sncast configuration (`snfoundry.toml`),
 not from environment variables.

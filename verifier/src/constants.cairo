@@ -1,11 +1,9 @@
 //! secp256k1 curve constants and Molpha domain separators.
 //!
 //! The domain separators are `keccak256` of their ASCII labels, matching the
-//! values in `Verifier.sol` / `NodeGroupBitmapLib.sol`:
-//!   MESSAGE_PREFIX        = keccak256("MOLPHA_MESSAGE_V1")
-//!   SELECTION_SEED_PREFIX = keccak256("MOLPHA_SELECTION_V1")
-//!   POP_DOMAIN            = keccak256("MOLPHA_VERIFIER_V1")
-//!   SELECTION_DOMAIN      = keccak256("MOLPHA_SELECTION_DERIVE")
+//! values in `Verifier.sol`:
+//!   MESSAGE_PREFIX = keccak256("MOLPHA_MESSAGE_V1")
+//!   POP_DOMAIN     = keccak256("MOLPHA_VERIFIER_V1")
 
 /// Field modulus P of secp256k1.
 pub fn FIELD_P() -> u256 {
@@ -27,25 +25,14 @@ pub fn MESSAGE_PREFIX() -> u256 {
     u256 { high: 0xa75523a2ab7b718d9cffd2fa97ed069f, low: 0xc12184eabee7d507854d0922f70e7fe7 }
 }
 
-/// keccak256("MOLPHA_SELECTION_V1")
-pub fn SELECTION_SEED_PREFIX() -> u256 {
-    u256 { high: 0x1def8159cbcfcdfd728d4197519a57c0, low: 0x6e243f0d9468b4c1e5c4a233fc5653c3 }
-}
-
 /// keccak256("MOLPHA_VERIFIER_V1")
 pub fn POP_DOMAIN() -> u256 {
     u256 { high: 0x789b999d1d38ea94308dd6904bfa70cf, low: 0x9ee14dd2b978fb6d2c894c9c84150a04 }
 }
 
-/// keccak256("MOLPHA_SELECTION_DERIVE")
-pub fn SELECTION_DOMAIN() -> u256 {
-    u256 { high: 0x492848fe5e85d4ce2231d693a58f0820, low: 0xa4056e2822fe5dcad7c756afe044b70b }
-}
-
-/// Milliseconds per selection window. `timestamp` is unix milliseconds; committee
-/// selection reads only `timestamp / SELECTION_WINDOW_MS`, so sub-second precision never
-/// changes who is selected. Changing it is a consensus break and must bump the selection prefix.
-pub const SELECTION_WINDOW_MS: u64 = 1000;
+/// Milliseconds per second. `timestamp` is unix milliseconds; `max_age` and registry
+/// activation are in seconds.
+pub const MILLIS_PER_SECOND: u64 = 1000;
 
 /// Maximum number of registered nodes (fits one 256-bit bitmap).
 pub const MAX_NODES: u32 = 256;

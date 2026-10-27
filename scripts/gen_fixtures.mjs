@@ -21,10 +21,6 @@ const repo = path.resolve(here, "..");
 const core = process.argv[2] ?? path.resolve(repo, "..", "molpha-core-contracts");
 
 const MESSAGE_PREFIX = keccak_256(Buffer.from("MOLPHA_MESSAGE_V1"));
-const SELECTION_SEED_PREFIX = keccak_256(Buffer.from("MOLPHA_SELECTION_V1"));
-// timestamp is unix milliseconds; selection reads its 1 s window index.
-const SELECTION_WINDOW_MS = 1000n;
-const SELECTION_DOMAIN = keccak_256(Buffer.from("MOLPHA_SELECTION_DERIVE"));
 
 const strip = (s) => String(s).replace(/^0x/i, "");
 const hex = (s) => Uint8Array.from(Buffer.from(strip(s), "hex"));
@@ -61,38 +57,6 @@ function messageHash(p, signersBitmap) {
   );
 }
 
-function selectionSeed(p) {
-  return keccak_256(cat(
-    SELECTION_SEED_PREFIX, hex(p.sourceId),
-    u32be(p.registryVersion), ubig(BigInt(p.timestamp) / SELECTION_WINDOW_MS, 8),
-  ));
-}
-
-function sampleWithoutReplacement(seed, n, g) {
-  const limit = (0xFFFFFFFFn / BigInt(n)) * BigInt(n);
-  let bm = 0n, selected = 0, counter = 0n;
-  while (selected < g) {
-    const d = Buffer.from(keccak_256(cat(seed, SELECTION_DOMAIN, ubig(counter, 32))));
-    counter++;
-    for (let w = 0; w < 8 && selected < g; w++) {
-      const draw = BigInt(d.readUInt32BE(w * 4));
-      if (draw < limit) {
-        const bit = 1n << (draw % BigInt(n));
-        if ((bm & bit) === 0n) { bm |= bit; selected++; }
-      }
-    }
-  }
-  return bm;
-}
-
-function deriveSelection(seed, n, g) {
-  const full = (1n << BigInt(n)) - 1n;
-  if (g === 0) return 0n;
-  if (g === n) return full;
-  if (g > Math.floor(n / 2)) return full ^ sampleWithoutReplacement(seed, n, n - g);
-  return sampleWithoutReplacement(seed, n, g);
-}
-
 /** Plain EC sum of the pubkeys named by `bitmap` (bit i = node i). */
 function aggregate(pubkeys, bitmap) {
   let acc = null;
@@ -112,7 +76,6 @@ const attest = JSON.parse(fs.readFileSync(path.join(core, "test/fixtures/attesta
 
 const d = fixture.dataUpdate;
 const s = fixture.schnorrSignature;
-const buffer = attest.redundancyBuffer;
 const nodeCount = fixture.nodePubkeys.length;
 
 // Self-checks: if any of these fail, the EVM fixture moved and the Cairo port
@@ -122,11 +85,10 @@ const msgHex = "0x" + Buffer.from(msg).toString("hex");
 if (msgHex !== fixture.messageHash.toLowerCase()) {
   throw new Error(`messageHash mismatch: computed ${msgHex}, fixture ${fixture.messageHash}`);
 }
-const seed = selectionSeed(d);
-const groupSize = Math.min(d.signaturesRequired + buffer, nodeCount);
-const selection = deriveSelection(seed, nodeCount, groupSize);
-if ((BigInt(s.signersBitmap) & ~selection & ((1n << 256n) - 1n)) !== 0n) {
-  throw new Error("fixture signers are not a subset of the derived selection");
+// Verification does not check committee selection, so the only structural check on the signer
+// set is that every set bit names a registered node.
+if ((BigInt(s.signersBitmap) >> BigInt(nodeCount)) !== 0n) {
+  throw new Error("fixture signers name a slot past the last node");
 }
 const [aggX, aggY] = aggregate(fixture.nodePubkeys, s.signersBitmap);
 
@@ -142,9 +104,8 @@ const cases = attest.cases.map((c) => {
   if (h !== c.expected.messageHash.toLowerCase()) {
     throw new Error(`${c.name}: messageHash mismatch`);
   }
-  const sel = deriveSelection(selectionSeed(p), nodeCount, Math.min(p.signaturesRequired + buffer, nodeCount));
-  if ((BigInt(sg.signersBitmap) & ~sel & ((1n << 256n) - 1n)) !== 0n) {
-    throw new Error(`${c.name}: signers are not a subset of the derived selection`);
+  if ((BigInt(sg.signersBitmap) >> BigInt(nodeCount)) !== 0n) {
+    throw new Error(`${c.name}: signers name a slot past the last node`);
   }
   return { ...c, payload: p, sig: sg };
 });
@@ -166,7 +127,6 @@ w();
 w(`// ---- ${nodeCount}-node round (fixture.json) ----`);
 w(`pub const REG_VERSION: u32 = ${d.registryVersion};`);
 w(`pub const SIGS_REQUIRED: u8 = ${d.signaturesRequired};`);
-w(`pub const REDUNDANCY_BUFFER: u32 = ${buffer};`);
 w(`pub const NODE_COUNT: u32 = ${nodeCount};`);
 w(`pub const TIMESTAMP: u64 = ${d.timestamp};`);
 w(`pub const SIGNERS_BITMAP: u256 = ${s.signersBitmap};`);
@@ -175,7 +135,6 @@ w();
 for (const [name, val] of [
   ["SOURCE_ID", BigInt(d.sourceId)], ["VALUE", BigInt(d.value)],
   ["SIGNATURE", BigInt(s.signature)], ["MESSAGE", BigInt(fixture.messageHash)],
-  ["SELECTION_SEED", BigInt("0x" + Buffer.from(seed).toString("hex"))],
   ["AGG_X", aggX], ["AGG_Y", aggY],
 ]) {
   w(`pub fn ${name}() -> u256 {`);
@@ -234,9 +193,8 @@ cases.forEach((c, i) => {
 const target = path.join(repo, "verifier/tests/fixtures.cairo");
 fs.writeFileSync(target, out.join("\n") + "\n");
 console.log(`wrote ${target}`);
-console.log(`  ${nodeCount} nodes, registryVersion ${d.registryVersion}, buffer ${buffer}`);
+console.log(`  ${nodeCount} nodes, registryVersion ${d.registryVersion}`);
 console.log(`  messageHash    ${msgHex}`);
-console.log(`  selectionSeed  0x${Buffer.from(seed).toString("hex")}`);
-console.log(`  selection      ${selection} (group ${groupSize}/${nodeCount}), signers ${s.signersBitmap}`);
+console.log(`  signers        ${s.signersBitmap}`);
 console.log(`  aggregate      x=0x${aggX.toString(16)}`);
 console.log(`  ${cases.length} end-to-end case(s): ${cases.map((c) => c.name).join(", ")}`);
