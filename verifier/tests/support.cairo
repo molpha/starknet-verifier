@@ -7,16 +7,18 @@ use snforge_std::{
     stop_cheat_caller_address,
 };
 use starknet::ContractAddress;
-use verifier::byte_utils::{append_u256_be, append_u32_be, append_u64_be, keccak_bytes};
-use verifier::constants::{CURVE_ORDER_Q, POP_DOMAIN, SELECTION_SEED_PREFIX, SELECTION_WINDOW_MS};
+use verifier::byte_utils::{
+    append_u256_be, append_u32_be, append_u64_be, append_u8_be, keccak_bytes,
+};
+use verifier::constants::{CURVE_ORDER_Q, MESSAGE_PREFIX, POP_DOMAIN};
 use verifier::interface::{
     Attestation, AttestationPayload, IVerifierDispatcher, IVerifierDispatcherTrait, SchnorrProof,
     SchnorrSignature,
 };
-use verifier::{bitmap, node_group_bitmap, schnorr, secp256k1_utils as ec};
+use verifier::{bitmap, schnorr, secp256k1_utils as ec};
 use super::fixtures::{
-    COMMITMENT, REDUNDANCY_BUFFER, REG_VERSION, SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED, SOURCE_ID,
-    TIMESTAMP, VALUE, compressed, fixture_nodes,
+    COMMITMENT, REG_VERSION, SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED, SOURCE_ID, TIMESTAMP, VALUE,
+    compressed, fixture_nodes,
 };
 
 /// `verify`'s freshness check is opt-in; tests that are not about staleness
@@ -31,19 +33,16 @@ pub fn ADMIN() -> ContractAddress {
     0x00ad3119.try_into().unwrap()
 }
 
-pub fn deploy_with_params(
-    initial_protocol_admin: ContractAddress, initial_redundancy_buffer: u32,
-) -> IVerifierDispatcher {
+pub fn deploy_with_params(initial_protocol_admin: ContractAddress) -> IVerifierDispatcher {
     let contract = declare("Verifier").unwrap().contract_class();
     let mut calldata: Array<felt252> = array![];
     initial_protocol_admin.serialize(ref calldata);
-    initial_redundancy_buffer.serialize(ref calldata);
     let (address, _) = contract.deploy(@calldata).unwrap();
     IVerifierDispatcher { contract_address: address }
 }
 
 pub fn deploy() -> IVerifierDispatcher {
-    deploy_with_params(ADMIN(), REDUNDANCY_BUFFER)
+    deploy_with_params(ADMIN())
 }
 
 /// (a * b) mod q using a 512-bit intermediate.
@@ -159,16 +158,9 @@ pub fn fixture_node_registration(
     (comp, pop, node)
 }
 
-/// selectionSeed = keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖ registryVersion ‖ timestamp /
-/// 1000)
-pub fn selection_seed(source_id: u256, registry_version: u32, timestamp: u64) -> u256 {
-    let mut buf: ByteArray = "";
-    append_u256_be(ref buf, SELECTION_SEED_PREFIX());
-    append_u256_be(ref buf, source_id);
-    append_u32_be(ref buf, registry_version);
-    append_u64_be(ref buf, timestamp / SELECTION_WINDOW_MS);
-    keccak_bytes(@buf)
-}
+/// Signers beyond the quorum in the scaling benchmarks. The size of the old committee, kept so the
+/// `signatures_required` values stay comparable across runs.
+const BENCH_QUORUM_MARGIN: u32 = 2;
 
 /// Fixed registry size for signer-scaling benchmarks (fair cross-comparison).
 pub const BENCH_NODE_COUNT: u32 = 18;
@@ -176,8 +168,8 @@ pub const BENCH_NODE_COUNT: u32 = 18;
 /// Bench parameters: `(node_count, signatures_required)` for `signer_count` signers.
 pub fn bench_verify_config(signer_count: u32) -> (u32, u8) {
     let node_count = BENCH_NODE_COUNT;
-    let required: u32 = if signer_count > REDUNDANCY_BUFFER + 3 {
-        signer_count - REDUNDANCY_BUFFER
+    let required: u32 = if signer_count > BENCH_QUORUM_MARGIN + 3 {
+        signer_count - BENCH_QUORUM_MARGIN
     } else {
         3
     };
@@ -185,38 +177,71 @@ pub fn bench_verify_config(signer_count: u32) -> (u32, u8) {
     (node_count, required.try_into().unwrap())
 }
 
-/// First `k` ascending signer indices from the derived selection bitmap.
-pub fn signers_bitmap_first_k(selection_bitmap: u256, k: u32) -> u256 {
-    let mut result: u256 = 0;
-    let mut taken: u32 = 0;
-    let mut pos: u32 = 0;
-    let mut bm = selection_bitmap;
-    while taken < k {
-        assert(bm != 0, 'selection too small');
-        if bm.low % 2 == 1 {
-            result = result | bitmap::two_pow(pos);
-            taken += 1;
+/// A valid attestation over `payload` signed by exactly the fixture nodes in `signers_bitmap`.
+///
+/// The aggregate secret is the sum of the signers' secrets and the aggregate key the sum of their
+/// keys, which is what the verifier reconstructs from the registry. Any subset of the twelve
+/// fixture nodes works, so tests can pick a quorum the fixture round did not.
+pub fn signed_attestation(payload: AttestationPayload, signers_bitmap: u256) -> Attestation {
+    let nodes = fixture_nodes();
+    let q = CURVE_ORDER_Q();
+    let mut sk_sum: u256 = 0;
+    let mut ax: u256 = 0;
+    let mut ay: u256 = 0;
+    let mut have = false;
+    let mut i: u32 = 0;
+    while i < nodes.len() {
+        if (signers_bitmap / bitmap::two_pow(i)) % 2 == 1 {
+            let (prefix, x, sk) = *nodes.at(i);
+            let (px, py) = ec::decompress(@compressed(prefix, x));
+            sk_sum = addmod(sk_sum, sk, q);
+            if have {
+                let (nx, ny) = ec::add_coords(ax, ay, px, py);
+                ax = nx;
+                ay = ny;
+            } else {
+                ax = px;
+                ay = py;
+                have = true;
+            }
         }
-        bm = bm / 2;
+        i += 1;
+    }
+
+    let mut buf: ByteArray = "";
+    append_u256_be(ref buf, MESSAGE_PREFIX());
+    append_u256_be(ref buf, payload.value);
+    append_u256_be(ref buf, payload.source_id);
+    append_u32_be(ref buf, payload.registry_version);
+    append_u8_be(ref buf, payload.signatures_required);
+    append_u64_be(ref buf, payload.timestamp);
+    append_u256_be(ref buf, signers_bitmap);
+    let message = keccak_bytes(@buf);
+
+    let proof = sign(ax, ay, sk_sum, message);
+    Attestation {
+        payload,
+        signature: SchnorrSignature {
+            signature: proof.signature, commitment: proof.commitment, signers_bitmap,
+        },
+    }
+}
+
+/// The lowest `k` slots as a signer bitmap. Any quorum of live slots verifies, so the benchmarks
+/// sign with the first `k`.
+pub fn signers_bitmap_first_k(k: u32) -> u256 {
+    let mut result: u256 = 0;
+    let mut pos: u32 = 0;
+    while pos < k {
+        result = result | bitmap::two_pow(pos);
         pos += 1;
     }
     result
 }
 
-/// Builds a `verify` payload that passes structural/selection checks for `signer_count`.
-///
-/// `group_size` matches the contract: `min(signatures_required + redundancy_buffer, node_count)`.
+/// Builds a `verify` payload for `signer_count` signers over the benchmark registry.
 pub fn bench_verify_attestation(signer_count: u32) -> Attestation {
     let (node_count, signatures_required) = bench_verify_config(signer_count);
-    let required32: u32 = signatures_required.into();
-    let group_size = if required32 + REDUNDANCY_BUFFER > node_count {
-        node_count
-    } else {
-        required32 + REDUNDANCY_BUFFER
-    };
-    let seed = selection_seed(SOURCE_ID(), node_count, TIMESTAMP);
-    let selection = node_group_bitmap::derive(seed, node_count, group_size).unwrap();
-    let signers_bitmap = signers_bitmap_first_k(selection, signer_count);
     Attestation {
         payload: AttestationPayload {
             value: VALUE(),
@@ -226,7 +251,9 @@ pub fn bench_verify_attestation(signer_count: u32) -> Attestation {
             timestamp: TIMESTAMP,
         },
         // Non-zero placeholder; the Schnorr check still runs at full cost.
-        signature: SchnorrSignature { signature: 1, commitment: 0x1, signers_bitmap },
+        signature: SchnorrSignature {
+            signature: 1, commitment: 0x1, signers_bitmap: signers_bitmap_first_k(signer_count),
+        },
     }
 }
 

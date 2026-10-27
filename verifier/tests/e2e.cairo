@@ -26,12 +26,12 @@ use super::fixtures::{
     CASE1_SIGNERS_BITMAP, CASE1_SIGS_REQUIRED, CASE1_SOURCE_ID, CASE1_TIMESTAMP, CASE1_VALUE,
     CASE2_COMMITMENT, CASE2_EXPECTED_CODE, CASE2_EXPECTED_OK, CASE2_REG_VERSION, CASE2_SIGNATURE,
     CASE2_SIGNERS_BITMAP, CASE2_SIGS_REQUIRED, CASE2_SOURCE_ID, CASE2_TIMESTAMP, CASE2_VALUE,
-    NODE_COUNT, REDUNDANCY_BUFFER, TIMESTAMP, compressed, fixture_nodes,
+    NODE_COUNT, TIMESTAMP, compressed, fixture_nodes,
 };
 use super::support::{
     ADMIN, NO_MAX_AGE, TIMESTAMP_SECS, add_key, deploy, deploy_with_params, fixture_attestation,
     fixture_node_registration, fixture_payload, fixture_signature, negated_fixture_node,
-    register_fixture_nodes, tampered_attestation,
+    register_fixture_nodes, signed_attestation, synthetic_node, tampered_attestation,
 };
 
 /// Deploys and registers the full fixture node set, leaving the block clock at
@@ -40,6 +40,13 @@ fn deployed_with_fixture_nodes() -> IVerifierDispatcher {
     let dispatcher = deploy();
     register_fixture_nodes(dispatcher, NODE_COUNT);
     dispatcher
+}
+
+/// Identity of fixture node 0, which is not in the fixture round's signer set. Removing it
+/// publishes a new registry version without touching the signers of that round.
+fn removable_id(dispatcher: IVerifierDispatcher) -> felt252 {
+    let (_, _, node) = fixture_node_registration(dispatcher, 0);
+    node
 }
 
 fn attestation_with_signature(sig: SchnorrSignature) -> Attestation {
@@ -60,7 +67,6 @@ fn register_nodes_and_verify_evm_fixture() {
 
     assert(dispatcher.get_registry_version() == NODE_COUNT, 'registry version');
     assert(dispatcher.get_total_nodes() == NODE_COUNT, 'total nodes');
-    assert(dispatcher.get_redundancy_buffer() == REDUNDANCY_BUFFER, 'redundancy buffer');
 
     let (ok, code) = dispatcher.verify(fixture_attestation(), NO_MAX_AGE);
     assert(ok, 'fixture must verify');
@@ -147,24 +153,38 @@ fn verify_rejects_nonexistent_registry_version() {
     assert(code == verify_codes::R_BAD_REGISTRY_VERSION, 'want R_BAD_REGISTRY_VERSION');
 }
 
+/// Committee selection is not part of verification: any quorum of registered nodes verifies. The
+/// fixture round was signed by nodes 4-10; here nodes 0-4 sign instead, which the old selection
+/// check rejected as `R_BAD_QUORUM`.
 #[test]
-fn verify_rejects_signer_outside_selection_bitmap() {
+fn verify_accepts_any_quorum_of_registered_nodes() {
     let dispatcher = deployed_with_fixture_nodes();
-    let mut sig = fixture_signature();
-    // Bit 0 is not in the round's derived selection group.
-    sig.signers_bitmap = sig.signers_bitmap | 1;
+    let attestation = signed_attestation(fixture_payload(), 0b11111);
 
-    let (ok, code) = dispatcher.verify(attestation_with_signature(sig), NO_MAX_AGE);
-    assert(!ok, 'unselected signer must fail');
-    assert(code == verify_codes::R_BAD_QUORUM, 'want R_BAD_QUORUM');
+    let (ok, code) = dispatcher.verify(attestation, NO_MAX_AGE);
+    assert(ok, 'any quorum must verify');
+    assert(code == verify_codes::R_OK, 'want R_OK');
+}
+
+#[test]
+fn verify_accepts_a_quorum_larger_than_any_committee() {
+    let dispatcher = deployed_with_fixture_nodes();
+    let mut payload = fixture_payload();
+    payload.signatures_required = 3;
+    // Eleven of twelve sign: far more than `signatures_required + buffer`.
+    let attestation = signed_attestation(payload, 0b111111111110);
+
+    let (ok, code) = dispatcher.verify(attestation, NO_MAX_AGE);
+    assert(ok, 'oversized quorum must verify');
+    assert(code == verify_codes::R_OK, 'want R_OK');
 }
 
 #[test]
 fn verify_rejects_bitmap_bit_above_node_count() {
     let dispatcher = deployed_with_fixture_nodes();
     let mut sig = fixture_signature();
-    // Bit 12 with 12 nodes: the selection bitmap only ever sets bits below
-    // node_count, so the subset test catches out-of-range bits for free.
+    // Bit 12 with 12 slots reads the zero pair. That is the bitmap's only bound check now that
+    // selection is not enforced.
     sig.signers_bitmap = sig.signers_bitmap | 4096;
 
     let (ok, code) = dispatcher.verify(attestation_with_signature(sig), NO_MAX_AGE);
@@ -264,7 +284,7 @@ fn verify_rejects_zero_commitment_and_zero_bitmap() {
 
 #[test]
 fn verify_on_empty_registry_reports_bad_quorum() {
-    // Genesis exists but holds no keys — the reachable `derive` failure.
+    // Genesis exists but holds no keys: every set bit is past the last slot.
     let dispatcher = deploy();
     let mut payload = fixture_payload();
     payload.registry_version = 0;
@@ -384,7 +404,7 @@ fn superseded_version_expires_after_the_grace_window() {
     // putting the fixture's version well past its grace window.
     start_cheat_block_timestamp(address, 1000);
     start_cheat_caller_address(address, ADMIN());
-    dispatcher.set_redundancy_buffer(REDUNDANCY_BUFFER);
+    dispatcher.remove_node(removable_id(dispatcher), 0);
     stop_cheat_caller_address(address);
     stop_cheat_block_timestamp(address);
 
@@ -401,7 +421,7 @@ fn superseded_version_still_verifies_inside_the_grace_window() {
     // Successor activates just inside `PREVIOUS_GRACE` of the payload.
     start_cheat_block_timestamp(address, TIMESTAMP_SECS - PREVIOUS_GRACE + 1);
     start_cheat_caller_address(address, ADMIN());
-    dispatcher.set_redundancy_buffer(REDUNDANCY_BUFFER);
+    dispatcher.remove_node(removable_id(dispatcher), 0);
     stop_cheat_caller_address(address);
     stop_cheat_block_timestamp(address);
 
@@ -411,11 +431,9 @@ fn superseded_version_still_verifies_inside_the_grace_window() {
 }
 
 #[test]
-fn changing_the_redundancy_buffer_does_not_invalidate_history() {
-    // The regression this versioning exists for: the buffer feeds `group_size`,
-    // which feeds the derived selection bitmap a signature is checked against.
-    // Mutating it in place would retroactively break payloads that already
-    // verify, so the setter publishes a new version instead.
+fn publishing_a_new_version_does_not_invalidate_history() {
+    // Every mutation publishes a new version and leaves the old snapshot intact, so a payload
+    // that already verifies keeps verifying inside the grace window.
     let dispatcher = deployed_with_fixture_nodes();
     let address = dispatcher.contract_address;
 
@@ -424,11 +442,10 @@ fn changing_the_redundancy_buffer_does_not_invalidate_history() {
 
     start_cheat_block_timestamp(address, TIMESTAMP_SECS - PREVIOUS_GRACE + 1);
     start_cheat_caller_address(address, ADMIN());
-    dispatcher.set_redundancy_buffer(REDUNDANCY_BUFFER + 3);
+    dispatcher.remove_node(removable_id(dispatcher), 0);
     stop_cheat_caller_address(address);
     stop_cheat_block_timestamp(address);
 
-    assert(dispatcher.get_redundancy_buffer() == REDUNDANCY_BUFFER + 3, 'buffer updated');
     assert(dispatcher.get_registry_version() == NODE_COUNT + 1, 'version bumped');
 
     let (after_ok, after_code) = dispatcher.verify(fixture_attestation(), NO_MAX_AGE);
@@ -481,7 +498,8 @@ fn remove_node_updates_set_and_aggregate() {
     stop_cheat_caller_address(address);
 
     assert(dispatcher.get_registry_version() == NODE_COUNT + 1, 'version after remove');
-    assert(dispatcher.get_total_nodes() == NODE_COUNT - 1, 'total after remove');
+    // Index 4 is not the last slot, so it is a hole and the slot count stays.
+    assert(dispatcher.get_total_nodes() == NODE_COUNT, 'slots after remove');
     assert(!dispatcher.is_node(removed_id), 'removed must be gone');
     assert(dispatcher.get_node_status(removed_id) == NODE_RETIRED, 'must be retired');
 
@@ -586,13 +604,6 @@ fn non_admin_cannot_transfer_admin() {
 
 #[test]
 #[should_panic]
-fn non_admin_cannot_set_redundancy_buffer() {
-    let dispatcher = deploy();
-    dispatcher.set_redundancy_buffer(5);
-}
-
-#[test]
-#[should_panic]
 fn add_node_rejects_invalid_pop() {
     let dispatcher = deploy();
     let address = dispatcher.contract_address;
@@ -621,5 +632,124 @@ fn add_node_rejects_duplicate_node() {
 #[should_panic]
 fn constructor_rejects_zero_protocol_admin() {
     let zero_admin: ContractAddress = 0.try_into().unwrap();
-    let _dispatcher = deploy_with_params(zero_admin, REDUNDANCY_BUFFER);
+    let _dispatcher = deploy_with_params(zero_admin);
+}
+
+// ---------------------------------------------------------------------------
+// Stable slots
+// ---------------------------------------------------------------------------
+
+fn fixture_id(dispatcher: IVerifierDispatcher, index: u32) -> felt252 {
+    let (_, _, node) = fixture_node_registration(dispatcher, index);
+    node
+}
+
+fn remove_at(dispatcher: IVerifierDispatcher, index: u32) {
+    let address = dispatcher.contract_address;
+    let node = fixture_id(dispatcher, index);
+    start_cheat_caller_address(address, ADMIN());
+    dispatcher.remove_node(node, index);
+    stop_cheat_caller_address(address);
+}
+
+#[test]
+fn removing_a_node_leaves_a_hole_and_every_other_node_keeps_its_slot() {
+    let dispatcher = deployed_with_fixture_nodes();
+    let last = fixture_id(dispatcher, NODE_COUNT - 1);
+    assert(dispatcher.get_node_index(last) == NODE_COUNT - 1, 'last slot before');
+
+    remove_at(dispatcher, 4);
+
+    // Swap-and-pop would have moved the last node into slot 4.
+    assert(dispatcher.get_node_index(last) == NODE_COUNT - 1, 'last node did not move');
+    assert(dispatcher.get_node_index(fixture_id(dispatcher, 3)) == 3, 'slot 3 stays');
+    assert(dispatcher.get_node_index(fixture_id(dispatcher, 5)) == 5, 'slot 5 stays');
+    assert(dispatcher.get_total_nodes() == NODE_COUNT, 'slot count includes the hole');
+}
+
+#[test]
+fn trailing_holes_are_trimmed() {
+    let dispatcher = deployed_with_fixture_nodes();
+    remove_at(dispatcher, 9);
+    remove_at(dispatcher, 10);
+    assert(dispatcher.get_total_nodes() == NODE_COUNT, 'holes inside the table stay');
+
+    // Removing the last slot drops it and the holes that now trail it.
+    remove_at(dispatcher, NODE_COUNT - 1);
+    assert(dispatcher.get_total_nodes() == 9, 'table ends on a live node');
+}
+
+#[test]
+fn a_new_node_takes_the_lowest_hole() {
+    let dispatcher = deployed_with_fixture_nodes();
+    remove_at(dispatcher, 6);
+    remove_at(dispatcher, 2);
+
+    let (comp, sk) = synthetic_node(1000);
+    add_key(dispatcher, comp.clone(), sk);
+    let (px, py) = ec::decompress(@comp);
+    let node = ec::point_eth_address(px, py);
+    assert(dispatcher.get_node_index(node) == 2, 'takes the lowest hole');
+    assert(dispatcher.get_total_nodes() == NODE_COUNT, 'no new slot');
+
+    let (comp, sk) = synthetic_node(1001);
+    add_key(dispatcher, comp.clone(), sk);
+    let (px, py) = ec::decompress(@comp);
+    assert(dispatcher.get_node_index(ec::point_eth_address(px, py)) == 6, 'then the next hole');
+
+    let (comp, sk) = synthetic_node(1002);
+    add_key(dispatcher, comp.clone(), sk);
+    let (px, py) = ec::decompress(@comp);
+    assert(
+        dispatcher.get_node_index(ec::point_eth_address(px, py)) == NODE_COUNT,
+        'no hole left: next slot',
+    );
+    assert(dispatcher.get_total_nodes() == NODE_COUNT + 1, 'one new slot');
+}
+
+#[test]
+fn a_signer_bit_on_a_hole_is_a_bad_quorum() {
+    let dispatcher = deployed_with_fixture_nodes();
+    // Node 7 signed the fixture round; once it is removed its bit names a hole.
+    remove_at(dispatcher, 7);
+    let mut payload = fixture_payload();
+    payload.registry_version = dispatcher.get_registry_version();
+
+    let (ok, code) = dispatcher.verify(attestation_with_payload(payload), NO_MAX_AGE);
+    assert(!ok, 'bit on a hole must fail');
+    assert(code == verify_codes::R_BAD_QUORUM, 'want R_BAD_QUORUM');
+}
+
+#[test]
+fn a_registry_with_a_hole_verifies_a_quorum_that_avoids_it() {
+    let dispatcher = deployed_with_fixture_nodes();
+    remove_at(dispatcher, 0);
+    let mut payload = fixture_payload();
+    payload.registry_version = dispatcher.get_registry_version();
+
+    // Nodes 4-10 still sit in the slots they signed with.
+    let attestation = signed_attestation(payload, fixture_signature().signers_bitmap);
+    let (ok, code) = dispatcher.verify(attestation, NO_MAX_AGE);
+    assert(ok, 'quorum avoiding the hole');
+    assert(code == verify_codes::R_OK, 'want R_OK');
+}
+
+#[test]
+fn emptying_the_registry_zeroes_the_aggregate() {
+    let dispatcher = deploy();
+    register_fixture_nodes(dispatcher, 2);
+    remove_at(dispatcher, 0);
+    remove_at(dispatcher, 1);
+
+    assert(dispatcher.get_total_nodes() == 0, 'no slots left');
+    let (agg_x, agg_y) = dispatcher.get_aggregate_key();
+    assert(agg_x == 0 && agg_y == 0, 'empty aggregate');
+
+    // And the registry takes nodes again from slot 0.
+    let (comp, sk) = synthetic_node(2000);
+    add_key(dispatcher, comp.clone(), sk);
+    let (px, py) = ec::decompress(@comp);
+    assert(dispatcher.get_node_index(ec::point_eth_address(px, py)) == 0, 'restarts at slot 0');
+    let (agg_x, agg_y) = dispatcher.get_aggregate_key();
+    assert(agg_x == px && agg_y == py, 'aggregate is the one key');
 }

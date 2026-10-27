@@ -9,9 +9,6 @@ signature valid on every chain. This contract reproduces the EVM verification
 pipeline exactly:
 
 ```
-selectionSeed   = keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖ u32(registryVersion)
-                            ‖ u64(timestamp / 1000))                   76 bytes
-selectionBitmap = deriveWithoutReplacement(selectionSeed, nodeCount, groupSize)
 message         = keccak256("MOLPHA_MESSAGE_V1" ‖ value ‖ sourceId ‖ u32(registryVersion)
                             ‖ u8(signaturesRequired) ‖ u64(timestamp, unix ms)
                             ‖ signersBitmap)                                   141 bytes
@@ -40,7 +37,6 @@ compares its Ethereum address to the commitment — mathematically identical, no
 | `interfaces/IVerifier.sol` | `interface.cairo` |
 | `libs/LibSchnorr.sol` | `schnorr.cairo` |
 | `libs/LibSecp256k1.sol` | `secp256k1_utils.cairo` (native syscalls + helpers) |
-| `libs/NodeGroupBitmapLib.sol` | `node_group_bitmap.cairo` |
 | `libs/BitmapLib.sol` | `bitmap.cairo` |
 | SSTORE2 pubkey blob + `PubkeyBlobLib.sol` | per-`(version, index)` storage maps in `verifier.cairo` |
 | `abi.encodePacked` + `keccak256` | `byte_utils.cairo` |
@@ -49,22 +45,25 @@ compares its Ethereum address to the commitment — mathematically identical, no
 
 The EVM contract keeps one immutable SSTORE2 blob per registry version. This
 port mirrors that with per-`(version, index)` coordinate maps, index 0 holding
-the running plain-sum aggregate key and indices `1..=nodeCount` the nodes. Every
-`add_node` / `remove_node` / `set_redundancy_buffer` creates a new immutable
-version, copying the prior set forward, so historical rounds stay permanently
-verifiable — exactly the EVM guarantee.
+the running plain-sum aggregate key and indices `1..=nodeCount` the key slots.
+Every `add_node` / `remove_node` creates a new immutable version, copying the
+prior set forward, so historical rounds stay permanently verifiable — exactly
+the EVM guarantee.
+
+Slots are stable. `remove_node` zeroes the node's slot (a hole) instead of
+moving the last node into it, so every other node keeps the bit it signs with;
+`add_node` takes the lowest hole, else the slot after the last. `nodeCount` is
+the number of slots, holes included, and trailing holes are trimmed. `verify`
+accepts any quorum of live slots: committee selection is not checked, and a set
+bit past the last slot or on a hole is `R_BAD_QUORUM` (7).
 
 The internal `+1` offset is fully compensated: the k-th registered node lands at
 storage index `k + 1`, and bit `k` of `signersBitmap` reads index `k + 1`. Bit
 `i` therefore names the same node as blob element `i` on EVM. The bitmap itself
 is 0-based on every chain.
 
-Each version also carries its own `redundancy_buffer`, `activates_at` and
-`is_latest`. The buffer is versioned rather than mutable because it feeds
-`group_size`, which feeds the derived selection bitmap a signature is checked
-against — mutating it in place would retroactively invalidate payloads that
-already verify. `activates_at` and `is_latest` bound the window a version is
-usable in: historical *rounds* stay verifiable forever, but historical
+Each version also carries its own `activates_at` and `is_latest`, which bound
+the window a version is usable in: historical *rounds* stay verifiable forever, but historical
 *versions* stop being usable 60 seconds after their successor activates, so the
 effective trust set is not the union of every node set that ever existed.
 
@@ -98,13 +97,13 @@ verification — a node simply produces a separate PoP per chain at registration
 `molpha-core-contracts/test/fixtures/{fixture,attestation}.json` by
 `../scripts/gen_fixtures.mjs`, so the Cairo suite is checked against the same
 bytes the Solidity and Rust suites are, and the generator re-derives the message
-hash and selection subset as a self-check before writing. Regenerate with
+hash as a self-check before writing. Regenerate with
 `node scripts/gen_fixtures.mjs` from the repo root.
 
 - `curve_assumptions.cairo` — pins the secp256k1 syscall behaviour at the point
   at infinity, which `verify`'s totality depends on.
 - `parity.cairo` — keccak/encoding parity, field width and order sensitivity,
-  node-selection parity, and acceptance of unmodified EVM-produced signatures.
+  and acceptance of unmodified EVM-produced signatures.
 - `e2e.cairo` — deploys the contract, registers the fixture nodes through the
   real `add_node` path (each gated by a freshly produced PoP), then drives
   `verify` end-to-end: the EVM golden payloads and both `attestation.json`

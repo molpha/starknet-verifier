@@ -67,18 +67,14 @@ pub trait IVerifier<TContractState> {
     fn add_node(ref self: TContractState, compressed_pubkey: ByteArray, pop: SchnorrProof);
 
     /// Removes a node by its Ethereum-style identity address. `index` is the
-    /// node's **0-based** position in the current registry version and is
-    /// checked as a witness, matching the EVM `removeNode(address, uint256)`
-    /// ABI. Admin only.
+    /// node's **0-based** slot in the current registry version and is checked
+    /// as a witness, matching the EVM `removeNode(address, uint256)` ABI. The
+    /// slot becomes a hole: no other node moves, and trailing holes are
+    /// trimmed. Admin only.
     fn remove_node(ref self: TContractState, node: felt252, index: u32);
 
     /// Transfers the protocol-admin role. Admin only.
     fn transfer_protocol_admin(ref self: TContractState, new_protocol_admin: ContractAddress);
-
-    /// Sets the redundancy buffer (`groupSize = signaturesRequired + buffer`).
-    /// Publishes a **new** registry version rather than mutating the current
-    /// one, so a payload that already verifies keeps verifying. Admin only.
-    fn set_redundancy_buffer(ref self: TContractState, new_redundancy_buffer: u32);
 
     /// Current registry version (number of node-set snapshots minus one).
     fn get_registry_version(self: @TContractState) -> u32;
@@ -90,18 +86,16 @@ pub trait IVerifier<TContractState> {
     /// A retired address is never reusable.
     fn get_node_status(self: @TContractState, node: felt252) -> u8;
 
-    /// Number of nodes in the current registry version.
+    /// Number of key slots in the current registry version, holes left by removed
+    /// nodes included.
     fn get_total_nodes(self: @TContractState) -> u32;
 
     /// Plain-sum aggregate public key over the current node set.
     fn get_aggregate_key(self: @TContractState) -> (u256, u256);
 
-    /// 0-based index of `node` in the current version; `is_node` distinguishes
-    /// "index 0" from "not registered".
+    /// 0-based slot of `node` in the current version; `is_node` distinguishes
+    /// "slot 0" from "not registered".
     fn get_node_index(self: @TContractState, node: felt252) -> u32;
-
-    /// The redundancy buffer of the current registry version.
-    fn get_redundancy_buffer(self: @TContractState) -> u32;
 
     /// Activation timestamp of `registry_version`, and whether it exists.
     fn get_activates_at(self: @TContractState, registry_version: u32) -> (u64, bool);

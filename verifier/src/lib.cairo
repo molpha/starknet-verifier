@@ -13,7 +13,8 @@
 //!   challenge  = keccak256(Pₓ ‖ Pₚ ‖ message ‖ commitment) mod Q
 //!   accept iff  ethAddress(s·G − challenge·P) == commitment
 //!
-//! where `P` is the plain EC sum of the selected signers' public keys. The
+//! where `P` is the plain EC sum of the signers' public keys. Any quorum of
+//! registered nodes may sign; the verifier does not check committee selection. The
 //! message preimage is 141 bytes; the field order and the narrow widths of
 //! `registryVersion`, `signaturesRequired` and `timestamp` are load
 //! bearing and shared with `VerifierLib.constructMessage` (EVM),
@@ -36,7 +37,6 @@ pub mod bitmap;
 pub mod byte_utils;
 pub mod constants;
 pub mod interface;
-pub mod node_group_bitmap;
 pub mod schnorr;
 pub mod secp256k1_utils;
 pub mod verifier;

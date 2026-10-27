@@ -2,22 +2,19 @@
 //!
 //! These prove the Cairo port reconstructs exactly the bytes the Solidity and
 //! Rust verifiers do: the same `(message, aggregateKey, signature, commitment)`
-//! verifies on every chain, and the keccak encodings and node selection match
-//! bit-for-bit. The expected values are generated from the EVM golden vectors
-//! by `scripts/gen_fixtures.mjs`, so a divergence shows up here rather than as
-//! a silently failing round in production.
+//! verifies on every chain, and the keccak encodings match bit-for-bit. The expected values are
+//! generated from the EVM golden vectors by `scripts/gen_fixtures.mjs`, so a divergence shows up
+//! here rather than as a silently failing round in production.
 
 use verifier::byte_utils::{
     append_u256_be, append_u32_be, append_u64_be, append_u8_be, keccak_bytes,
 };
-use verifier::constants::{MESSAGE_PREFIX, SELECTION_SEED_PREFIX, SELECTION_WINDOW_MS};
-use verifier::{node_group_bitmap, schnorr, secp256k1_utils as ec};
+use verifier::constants::MESSAGE_PREFIX;
+use verifier::{schnorr, secp256k1_utils as ec};
 use super::fixtures::{
-    AGG_X, AGG_Y, COMMITMENT, MESSAGE, NODE_COUNT, REDUNDANCY_BUFFER, REG_VERSION, SELECTION_SEED,
-    SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED, SOURCE_ID, TIMESTAMP, VALUE, compressed,
-    fixture_nodes,
+    AGG_X, AGG_Y, COMMITMENT, MESSAGE, REG_VERSION, SIGNATURE, SIGNERS_BITMAP, SIGS_REQUIRED,
+    SOURCE_ID, TIMESTAMP, VALUE, compressed, fixture_nodes,
 };
-use super::support::selection_seed;
 
 #[test]
 fn keccak_is_evm_compatible() {
@@ -32,30 +29,6 @@ fn keccak_is_evm_compatible() {
         },
         'keccak empty mismatch',
     );
-}
-
-#[test]
-fn selection_seed_encoding_matches_evm() {
-    // keccak256("MOLPHA_SELECTION_V1" ‖ sourceId ‖ u32 registryVersion
-    //           ‖ u64 timestamp / 1000) — 76 bytes. The timestamp is unix
-    // milliseconds; the seed reads its 1 s window index.
-    let mut buf: ByteArray = "";
-    append_u256_be(ref buf, SELECTION_SEED_PREFIX());
-    append_u256_be(ref buf, SOURCE_ID());
-    append_u32_be(ref buf, REG_VERSION);
-    append_u64_be(ref buf, TIMESTAMP / SELECTION_WINDOW_MS);
-    assert(keccak_bytes(@buf) == SELECTION_SEED(), 'selection seed mismatch');
-}
-
-#[test]
-fn selection_seed_reads_only_the_one_second_window() {
-    let base = selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP);
-    assert(selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP + 1) == base, '+1 ms same window');
-    assert(
-        selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP + 999) == base, '+999 ms same window',
-    );
-    assert(selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP + 1000) != base, 'next window');
-    assert(selection_seed(SOURCE_ID(), REG_VERSION, TIMESTAMP - 1) != base, 'previous window');
 }
 
 /// The canonical 141-byte preimage, rebuilt here independently of the contract.
@@ -132,30 +105,6 @@ fn message_encoding_is_sensitive_to_field_order() {
     append_u256_be(ref reordered, VALUE());
     append_u64_be(ref reordered, TIMESTAMP);
     assert(keccak_bytes(@reordered) != MESSAGE(), 'field order must matter');
-}
-
-#[test]
-fn selection_bitmap_matches_evm() {
-    // derive(seed, nodeCount, groupSize = signaturesRequired + redundancyBuffer).
-    // groupSize exceeds nodeCount/2 here, so this also exercises the complement
-    // branch, which selects a different set than sampling the group directly.
-    let group_size: u32 = SIGS_REQUIRED.into() + REDUNDANCY_BUFFER;
-    let bm = node_group_bitmap::derive(SELECTION_SEED(), NODE_COUNT, group_size).unwrap();
-    assert(bm == SIGNERS_BITMAP, 'selection bitmap mismatch');
-}
-
-#[test]
-fn derive_reports_empty_node_set_instead_of_panicking() {
-    // `verify` must never panic, so the sampler reports bad parameters as a
-    // value. An empty node set is the reachable case: a registry version that
-    // exists but holds no keys.
-    assert(
-        node_group_bitmap::derive(SELECTION_SEED(), 0, 0).is_none(), 'zero nodes should be None',
-    );
-    assert(
-        node_group_bitmap::derive(SELECTION_SEED(), 4, 5).is_none(),
-        'oversized group should be None',
-    );
 }
 
 #[test]
